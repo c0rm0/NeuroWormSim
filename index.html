@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retro Neural Evolution Lab</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hud-bar panel">
+      <div class="branding">
+        <p class="eyebrow">AUTONOMOUS BIOSPHERE // PIXEL SIGNAL</p>
+        <h1>Retro Neural Evolution Lab</h1>
+        <p class="tagline">Creatures learn to survive through sight, motion, hunger, collisions, and mutation.</p>
+      </div>
+      <div class="status-strip">
+        <div class="status-card">
+          <span class="status-label">Population</span>
+          <strong id="populationStat">00</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Food</span>
+          <strong id="foodStat">00</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Births</span>
+          <strong id="birthStat">00</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Oldest Alive</span>
+          <strong id="oldestStat">--</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Extinctions</span>
+          <strong id="extinctionStat">00</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Runtime</span>
+          <strong id="runtimeStat">00:00</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Since Extinction</span>
+          <strong id="lineageStat">00:00</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="sim-layout">
+      <section class="panel telemetry-panel">
+        <div class="panel-heading">
+          <h2>Telemetry Scope</h2>
+          <p>Rolling signal graphs for population, food field, average energy, and average creature age.</p>
+        </div>
+        <canvas id="telemetryCanvas" width="360" height="860" aria-label="Simulation telemetry graphs"></canvas>
+        <div class="telemetry-footnote">
+          <span class="telemetry-pill population">Population</span>
+          <span class="telemetry-pill food">Food</span>
+          <span class="telemetry-pill energy">Energy</span>
+          <span class="telemetry-pill age">Average Age</span>
+        </div>
+      </section>
+
+      <section class="panel world-panel">
+        <div class="panel-heading">
+          <h2>Closed Habitat</h2>
+          <p>Two eyes per creature. Four motion outputs. No escape.</p>
+        </div>
+        <div class="canvas-frame">
+          <canvas id="worldCanvas" width="1280" height="860" aria-label="Neural evolution simulation"></canvas>
+          <div class="canvas-overlay">
+            <span>FOOD: GREEN</span>
+            <span>WALLS: CYAN</span>
+            <span>CREATURES: AMBER</span>
+            <span>OLDEST: HIGHLIGHTED</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel network-panel">
+          <div class="panel-heading">
+            <h2>Longest-Living Brain</h2>
+            <p>Live signals from the oldest creature still alive.</p>
+          </div>
+          <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
+          <div id="creatureDetails" class="creature-details"></div>
+        </section>
+
+        <section class="panel legend-panel">
+          <div class="panel-heading">
+            <h2>Signal Map</h2>
+            <p>Each eye senses food, creatures, and walls by distance and angle.</p>
+          </div>
+          <div class="legend-grid">
+            <div class="legend-item"><span class="legend-swatch food"></span><span>Food signals</span></div>
+            <div class="legend-item"><span class="legend-swatch creature"></span><span>Creature signals</span></div>
+            <div class="legend-item"><span class="legend-swatch wall"></span><span>Wall signals</span></div>
+            <div class="legend-item"><span class="legend-swatch positive"></span><span>Positive weights</span></div>
+            <div class="legend-item"><span class="legend-swatch negative"></span><span>Negative weights</span></div>
+            <div class="legend-item"><span class="legend-swatch focus"></span><span>Oldest survivor focus</span></div>
+          </div>
+          <div class="microcopy">
+            <p>Outputs: <strong>FORWARD</strong>, <strong>BACKWARD</strong>, <strong>LEFT</strong>, <strong>RIGHT</strong>.</p>
+            <p>Body segments now curl through turns, giving each creature a centipede-like motion profile.</p>
+          </div>
+        </section>
+
+        <section class="panel controls-panel">
+          <div class="panel-heading">
+            <h2>Lab Controls</h2>
+            <p>Tune the habitat live with retro sliders for ecology, energy, motion, evolution, and sound.</p>
+          </div>
+          <div id="controlDeck" class="control-deck" aria-label="Simulation controls"></div>
+          <div class="control-actions">
+            <button id="resetControlsButton" class="retro-button" type="button">RESET DEFAULTS</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

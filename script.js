@@ -1,0 +1,5192 @@
+const worldCanvas = document.getElementById("worldCanvas");
+const worldCtx = worldCanvas.getContext("2d");
+const telemetryCanvas = document.getElementById("telemetryCanvas");
+const telemetryCtx = telemetryCanvas.getContext("2d");
+const networkCanvas = document.getElementById("networkCanvas");
+const networkCtx = networkCanvas.getContext("2d");
+
+const populationStat = document.getElementById("populationStat");
+const foodStat = document.getElementById("foodStat");
+const birthStat = document.getElementById("birthStat");
+const oldestStat = document.getElementById("oldestStat");
+const extinctionStat = document.getElementById("extinctionStat");
+const runtimeStat = document.getElementById("runtimeStat");
+const lineageStat = document.getElementById("lineageStat");
+const creatureDetails = document.getElementById("creatureDetails");
+const controlDeck = document.getElementById("controlDeck");
+const resetControlsButton = document.getElementById("resetControlsButton");
+
+worldCtx.imageSmoothingEnabled = false;
+telemetryCtx.imageSmoothingEnabled = false;
+networkCtx.imageSmoothingEnabled = false;
+
+const WIDTH = worldCanvas.width;
+const HEIGHT = worldCanvas.height;
+const TAU = Math.PI * 2;
+
+const DEFAULT_CONFIG = {
+  initialCreatures: 18,
+  maxCreatures: 36,
+  initialFood: 6,
+  maxFood: 100,
+  creatureRadius: 10,
+  foodRadius: 4,
+  eyeRange: 150,
+  eyeFov: 1.16,
+  eyeOffset: 0.52,
+  thrust: 0.26,
+  sideThrust: 0.18,
+  turnRate: 0.04,
+  turnDrag: 0.76,
+  maxTurnSpeed: 0.095,
+  friction: 0.9,
+  maxSpeed: 4,
+  metabolism: 0.055,
+  motionCost: 0.03,
+  collisionCost: 0.25,
+  energyFromFood: 30,
+  startingEnergy: 68,
+  maxEnergy: 145,
+  mouthReach: 5,
+  mouthArc: 0.9,
+  minEatingForwardDrive: 0.15,
+  minEatingForwardVelocity: 0.18,
+  eggHatchFrames: 180,
+  juvenileGrowthFrames: 600,
+  deathAnimationFrames: 40,
+  memoryNeuronCount: 4,
+  memoryWriteBlend: 0.22,
+  segmentGeneMin: 3,
+  segmentGeneMax: 8,
+  segmentFollowStiffness: 0.09,
+  segmentConstraintPull: 0.32,
+  segmentVelocityDamping: 0.86,
+  segmentAngleFollow: 0.12,
+  segmentAngleCarry: 0.025,
+  segmentMaxSpeed: 1.35,
+  segmentCollisionTransfer: 0.08,
+  segmentWallBounce: 0.26,
+  segmentTurnCurlStrength: 1.35,
+  segmentSignalSmoothing: 0.14,
+  reproduceThreshold: 112,
+  reproduceCost: 42,
+  maturityAge: 850,
+  reproduceChance: 0.0055,
+  foodSpawnChance: 0.06,
+  mutationRate: 0.14,
+  mutationScale: 0.28,
+  hiddenLayerSizes: [8, 8, 8],
+  wallPointGap: 28,
+  foodLifetimeFrames: 1800,
+  extinctionDelay: 450,
+  maxSparks: 80,
+  networkValueSmoothing: 0.2,
+  connectionGlowAttack: 0.34,
+  connectionGlowDecay: 0.1,
+  startupIntroFrames: 210,
+  soundVolume: 0.3
+};
+
+const CONFIG = {
+  ...DEFAULT_CONFIG
+};
+
+const SENSOR_INPUT_LABELS = [
+  "L Food D",
+  "L Food A",
+  "L Creature D",
+  "L Creature A",
+  "L Wall D",
+  "L Wall A",
+  "R Food D",
+  "R Food A",
+  "R Creature D",
+  "R Creature A",
+  "R Wall D",
+  "R Wall A"
+];
+
+const SENSOR_INPUT_COLORS = [
+  "#80ff88",
+  "#9ee8ff",
+  "#ffb447",
+  "#ffd277",
+  "#66dcff",
+  "#8ed7ff",
+  "#80ff88",
+  "#9ee8ff",
+  "#ffb447",
+  "#ffd277",
+  "#66dcff",
+  "#8ed7ff"
+];
+const MEMORY_INPUT_LABELS = Array.from(
+  { length: CONFIG.memoryNeuronCount },
+  (_, index) => `MEM ${index + 1}`
+);
+const MEMORY_INPUT_COLORS = Array.from(
+  { length: CONFIG.memoryNeuronCount },
+  (_, index) => ["#fff17b", "#ffd277", "#ffb447", "#ff9a6e"][index % 4]
+);
+const INPUT_LABELS = [...SENSOR_INPUT_LABELS, ...MEMORY_INPUT_LABELS];
+const INPUT_COLORS = [...SENSOR_INPUT_COLORS, ...MEMORY_INPUT_COLORS];
+const MOVEMENT_OUTPUT_LABELS = ["FORWARD", "BACKWARD", "LEFT", "RIGHT"];
+const MEMORY_OUTPUT_LABELS = Array.from(
+  { length: CONFIG.memoryNeuronCount },
+  (_, index) => `WRITE M${index + 1}`
+);
+const OUTPUT_LABELS = [...MOVEMENT_OUTPUT_LABELS, ...MEMORY_OUTPUT_LABELS];
+const OUTPUT_COLORS = [
+  "#4affd4",
+  "#ff6db3",
+  "#ffd277",
+  "#fff17b",
+  ...Array.from(
+    { length: CONFIG.memoryNeuronCount },
+    (_, index) => ["#8ed7ff", "#80ff88", "#ffb447", "#9ee8ff"][index % 4]
+  )
+];
+const SENSOR_INPUT_COUNT = SENSOR_INPUT_LABELS.length;
+const MOVEMENT_OUTPUT_COUNT = MOVEMENT_OUTPUT_LABELS.length;
+const TELEMETRY_HISTORY_LIMIT = 220;
+const TELEMETRY_SAMPLE_INTERVAL = 6;
+
+const CONTROL_DEFS = [
+  {
+    key: "maxCreatures",
+    label: "Max Population",
+    min: 6,
+    max: 80,
+    step: 1,
+    note: "Hard population cap. Lowering it trims the weakest creatures first."
+  },
+  {
+    key: "maxFood",
+    label: "Max Food",
+    min: 12,
+    max: 220,
+    step: 1,
+    note: "Upper limit for food pellets present in the habitat."
+  },
+  {
+    key: "reproduceThreshold",
+    label: "Repro Energy",
+    min: 40,
+    max: 180,
+    step: 1,
+    note: "Energy needed before a creature is allowed to reproduce."
+  },
+  {
+    key: "energyFromFood",
+    label: "Food Energy",
+    min: 6,
+    max: 70,
+    step: 1,
+    note: "How much energy each food pickup restores."
+  },
+  {
+    key: "metabolism",
+    label: "Metabolism",
+    min: 0.01,
+    max: 0.2,
+    step: 0.005,
+    note: "Passive energy drain every tick.",
+    format: (value) => value.toFixed(3)
+  },
+  {
+    key: "foodSpawnChance",
+    label: "Food Spawn Rate",
+    min: 0.01,
+    max: 0.2,
+    step: 0.01,
+    note: "Chance each tick to spawn food while under the cap.",
+    format: (value) => `${Math.round(value * 100)}%`
+  },
+  {
+    key: "mutationRate",
+    label: "Mutation Rate",
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    note: "How often child brains mutate during reproduction.",
+    format: (value) => `${Math.round(value * 100)}%`
+  },
+  {
+    key: "reproduceChance",
+    label: "Repro Chance",
+    min: 0.001,
+    max: 0.03,
+    step: 0.001,
+    note: "Per-tick breeding chance once age and energy checks pass.",
+    format: (value) => `${(value * 100).toFixed(1)}%`
+  },
+  {
+    key: "eyeRange",
+    label: "Vision Range",
+    min: 70,
+    max: 260,
+    step: 2,
+    note: "How far each eye can sense walls, food, and creatures."
+  },
+  {
+    key: "maxSpeed",
+    label: "Max Speed",
+    min: 1,
+    max: 5,
+    step: 0.1,
+    note: "Top movement speed after thrust and friction settle.",
+    format: (value) => value.toFixed(1)
+  },
+  {
+    key: "soundVolume",
+    label: "Sound Volume",
+    min: 0,
+    max: 1,
+    step: 0.01,
+    note: "Master volume for creature arcade tones and extinction synth effects.",
+    format: (value) => `${Math.round(value * 100)}%`
+  }
+];
+
+const wallSensorPoints = buildWallSensorPoints();
+const controlElements = {};
+
+const state = {
+  creatures: [],
+  foods: [],
+  sparks: [],
+  births: 0,
+  tick: 0,
+  nextCreatureId: 1,
+  featured: null,
+  archiveBrain: null,
+  archiveHue: 42,
+  archiveSegmentGene: 5,
+  bestEverAge: 0,
+  extinctionCandidateBrain: null,
+  extinctionCandidateHue: 42,
+  extinctionCandidateAge: 0,
+  extinctionCandidateGeneration: 1,
+  extinctionCandidateSegmentGene: 5,
+  recentExtinctionBrain: null,
+  recentExtinctionHue: 42,
+  recentExtinctionGeneration: 1,
+  recentExtinctionSegmentGene: 5,
+  extinctionFrames: 0,
+  extinctionCount: 0,
+  lineageTick: 0,
+  extinctionLogged: false,
+  extinctionSpecimen: null,
+  extinctionScene: null,
+  networkDisplay: null,
+  startupScene: null,
+  telemetryHistory: [],
+  telemetrySampleClock: 0
+};
+
+const audioState = {
+  context: null,
+  masterGain: null,
+  cooldowns: Object.create(null),
+  activeExtinctionScene: null,
+  lastExtinctionPhase: "",
+  lastCapturePulseTick: -9999,
+  lastScanPulseTick: -9999
+};
+
+function rand(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function damp(current, target, factor) {
+  return current + (target - current) * factor;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function smooth01(value) {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function dampAngle(current, target, factor) {
+  return current + normalizeAngle(target - current) * factor;
+}
+
+function normalizeHueValue(value) {
+  return ((value % 360) + 360) % 360;
+}
+
+function normalizeAngle(angle) {
+  let wrapped = angle;
+  while (wrapped > Math.PI) {
+    wrapped -= TAU;
+  }
+  while (wrapped < -Math.PI) {
+    wrapped += TAU;
+  }
+  return wrapped;
+}
+
+function sigmoid(value) {
+  return 1 / (1 + Math.exp(-value));
+}
+
+function clampSegmentGene(value) {
+  return clamp(Math.round(value), CONFIG.segmentGeneMin, CONFIG.segmentGeneMax);
+}
+
+function randomSegmentGene() {
+  return clampSegmentGene(rand(CONFIG.segmentGeneMin, CONFIG.segmentGeneMax + 0.999));
+}
+
+function mutateSegmentGene(parentGene) {
+  let nextGene = clampSegmentGene(parentGene);
+  if (Math.random() < Math.max(0.12, CONFIG.mutationRate * 1.35)) {
+    nextGene = clampSegmentGene(nextGene + (Math.random() < 0.5 ? -1 : 1));
+  }
+  return nextGene;
+}
+
+function formatAge(age) {
+  const seconds = age / 60;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rem = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${minutes}:${rem}`;
+}
+
+function formatRunTimer(frames) {
+  const totalSeconds = Math.max(0, Math.floor(frames / 60));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = Math.floor(totalSeconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return hours > 0 ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+function formatSignedSignal(value) {
+  const normalized = Math.abs(value) < 0.005 ? 0 : value;
+  return `${normalized >= 0 ? "+" : "-"}${Math.abs(normalized).toFixed(2)}`;
+}
+
+const TELEMETRY_SERIES = [
+  {
+    key: "population",
+    label: "POPULATION",
+    color: "#fff17b",
+    maxValue: (samples) => {
+      let max = CONFIG.maxCreatures;
+      for (let i = 0; i < samples.length; i += 1) {
+        max = Math.max(max, samples[i].population);
+      }
+      return Math.max(1, max);
+    },
+    formatValue: (value) => String(Math.round(value)).padStart(2, "0"),
+    formatScale: (value) => `CAP ${Math.round(value)}`
+  },
+  {
+    key: "food",
+    label: "FOOD FIELD",
+    color: "#80ff88",
+    maxValue: (samples) => {
+      let max = CONFIG.maxFood;
+      for (let i = 0; i < samples.length; i += 1) {
+        max = Math.max(max, samples[i].food);
+      }
+      return Math.max(1, max);
+    },
+    formatValue: (value) => String(Math.round(value)).padStart(2, "0"),
+    formatScale: (value) => `CAP ${Math.round(value)}`
+  },
+  {
+    key: "avgEnergy",
+    label: "AVG ENERGY",
+    color: "#4affd4",
+    maxValue: () => Math.max(1, CONFIG.maxEnergy),
+    formatValue: (value) => `${Math.round(value)}`,
+    formatScale: (value) => `CAP ${Math.round(value)}`
+  },
+  {
+    key: "avgAge",
+    label: "AVG AGE",
+    color: "#ff6db3",
+    maxValue: (samples) => {
+      let maxAge = 900;
+      for (let i = 0; i < samples.length; i += 1) {
+        maxAge = Math.max(maxAge, samples[i].avgAge);
+      }
+      return Math.ceil(maxAge / 300) * 300;
+    },
+    formatValue: (value) => formatRunTimer(value),
+    formatScale: (value) => `MAX ${formatRunTimer(value)}`
+  }
+];
+
+function getStepPrecision(step) {
+  const stepString = String(step);
+  if (!stepString.includes(".")) {
+    return 0;
+  }
+  return stepString.split(".")[1].length;
+}
+
+function formatControlValue(def, value) {
+  if (def.format) {
+    return def.format(value);
+  }
+  const precision = getStepPrecision(def.step);
+  return precision > 0 ? value.toFixed(precision) : String(Math.round(value));
+}
+
+function getMasterVolumeLevel() {
+  return Math.pow(CONFIG.soundVolume, 1.35) * 0.24;
+}
+
+function ensureAudioContext() {
+  if (audioState.context) {
+    return audioState.context;
+  }
+
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    return null;
+  }
+
+  const context = new AudioContextCtor();
+  const masterGain = context.createGain();
+  masterGain.gain.value = getMasterVolumeLevel();
+  masterGain.connect(context.destination);
+
+  audioState.context = context;
+  audioState.masterGain = masterGain;
+  return context;
+}
+
+function updateMasterVolume(immediate = false) {
+  if (!audioState.context || !audioState.masterGain) {
+    return;
+  }
+
+  const now = audioState.context.currentTime;
+  const target = getMasterVolumeLevel();
+  audioState.masterGain.gain.cancelScheduledValues(now);
+  if (immediate) {
+    audioState.masterGain.gain.setValueAtTime(target, now);
+  } else {
+    audioState.masterGain.gain.setTargetAtTime(target, now, 0.03);
+  }
+}
+
+function unlockAudioContext() {
+  const context = ensureAudioContext();
+  if (!context) {
+    return;
+  }
+
+  if (context.state === "suspended") {
+    context.resume().catch(() => {});
+  }
+  updateMasterVolume(true);
+}
+
+function panFromWorldX(x) {
+  if (!Number.isFinite(x)) {
+    return 0;
+  }
+  return clamp(((x / WIDTH) * 2 - 1) * 0.72, -0.72, 0.72);
+}
+
+function playThrottledSound(key, minGapFrames, callback) {
+  if (state.tick - (audioState.cooldowns[key] ?? -9999) < minGapFrames) {
+    return;
+  }
+  audioState.cooldowns[key] = state.tick;
+  callback();
+}
+
+function playSynthTone(options = {}) {
+  const context = ensureAudioContext();
+  if (!context || context.state !== "running" || CONFIG.soundVolume <= 0.001 || !audioState.masterGain) {
+    return;
+  }
+
+  const frequency = Math.max(30, options.frequency ?? 440);
+  const frequencyEnd = Math.max(30, options.frequencyEnd ?? frequency);
+  const duration = Math.max(0.02, options.duration ?? 0.1);
+  const attack = Math.max(0.002, options.attack ?? 0.005);
+  const release = Math.max(0.02, options.release ?? duration * 0.75);
+  const delay = Math.max(0, options.delay ?? 0);
+  const volume = Math.max(0.0001, options.volume ?? 0.05);
+  const type = options.type || "square";
+  const pan = clamp(options.pan ?? 0, -1, 1);
+  const detune = options.detune ?? 0;
+  const startTime = context.currentTime + delay;
+  const stopTime = startTime + duration + release;
+
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const usePanner = typeof context.createStereoPanner === "function";
+  const panner = usePanner ? context.createStereoPanner() : null;
+
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, startTime);
+  oscillator.frequency.exponentialRampToValueAtTime(frequencyEnd, startTime + duration);
+  oscillator.detune.setValueAtTime(detune, startTime);
+
+  gain.gain.setValueAtTime(0.0001, startTime);
+  gain.gain.linearRampToValueAtTime(volume, startTime + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, stopTime);
+
+  oscillator.connect(gain);
+  if (panner) {
+    panner.pan.setValueAtTime(pan, startTime);
+    gain.connect(panner);
+    panner.connect(audioState.masterGain);
+  } else {
+    gain.connect(audioState.masterGain);
+  }
+
+  oscillator.start(startTime);
+  oscillator.stop(stopTime + 0.01);
+}
+
+function playEatSound(x) {
+  playThrottledSound("eat", 3, () => {
+    const pan = panFromWorldX(x);
+    playSynthTone({ frequency: 960, frequencyEnd: 620, duration: 0.05, release: 0.04, volume: 0.055, type: "square", pan });
+    playSynthTone({ frequency: 1280, frequencyEnd: 980, duration: 0.035, release: 0.03, volume: 0.024, type: "triangle", pan, delay: 0.018 });
+  });
+}
+
+function playBirthSound(x) {
+  playThrottledSound("birth", 8, () => {
+    const pan = panFromWorldX(x);
+    playSynthTone({ frequency: 330, frequencyEnd: 440, duration: 0.08, release: 0.06, volume: 0.045, type: "square", pan });
+    playSynthTone({ frequency: 495, frequencyEnd: 660, duration: 0.07, release: 0.06, volume: 0.03, type: "triangle", pan, delay: 0.045 });
+  });
+}
+
+function playHatchSound(x) {
+  playThrottledSound("hatch", 8, () => {
+    const pan = panFromWorldX(x);
+    playSynthTone({ frequency: 420, frequencyEnd: 720, duration: 0.09, release: 0.07, volume: 0.042, type: "triangle", pan });
+    playSynthTone({ frequency: 620, frequencyEnd: 980, duration: 0.08, release: 0.06, volume: 0.028, type: "square", pan, delay: 0.035 });
+  });
+}
+
+function playDeathSound(x) {
+  playThrottledSound("death", 5, () => {
+    const pan = panFromWorldX(x);
+    playSynthTone({ frequency: 280, frequencyEnd: 112, duration: 0.16, release: 0.08, volume: 0.05, type: "sawtooth", pan });
+  });
+}
+
+function playCollisionSound(x, intensity = 1) {
+  playThrottledSound("collision", 4, () => {
+    const pan = panFromWorldX(x);
+    const volume = 0.018 + clamp(intensity, 0, 1) * 0.02;
+    const base = 170 + Math.random() * 90;
+    playSynthTone({ frequency: base, frequencyEnd: base * 0.82, duration: 0.045, release: 0.035, volume, type: "square", pan });
+  });
+}
+
+function playExtinctionPhaseTone(phase, inherited = false, slotIndex = 0) {
+  const pan = clamp((slotIndex - 1.5) * 0.18, -0.45, 0.45);
+  if (phase === "enter") {
+    playSynthTone({ frequency: 180, frequencyEnd: 140, duration: 0.24, release: 0.12, volume: 0.05, type: "sawtooth", pan: 0 });
+    playSynthTone({ frequency: 320, frequencyEnd: 240, duration: 0.18, release: 0.1, volume: 0.02, type: "triangle", pan: 0, delay: 0.04 });
+    return;
+  }
+  if (phase === "capture") {
+    playSynthTone({ frequency: 240, frequencyEnd: 180, duration: 0.08, release: 0.05, volume: 0.024, type: "square", pan: 0 });
+    return;
+  }
+  if (phase === "scan") {
+    playSynthTone({ frequency: 720, frequencyEnd: 520, duration: 0.06, release: 0.05, volume: 0.026, type: "triangle", pan: 0 });
+    return;
+  }
+  if (phase === "scan-locked") {
+    playSynthTone({ frequency: 560, frequencyEnd: 760, duration: 0.09, release: 0.06, volume: 0.035, type: "triangle", pan: 0 });
+    playSynthTone({ frequency: 820, frequencyEnd: 980, duration: 0.06, release: 0.05, volume: 0.022, type: "square", pan: 0, delay: 0.04 });
+    return;
+  }
+  if (phase === "build") {
+    playSynthTone({ frequency: inherited ? 260 : 300, frequencyEnd: inherited ? 420 : 520, duration: 0.08, release: 0.06, volume: 0.03, type: inherited ? "triangle" : "square", pan });
+    return;
+  }
+  if (phase === "mutate") {
+    playSynthTone({ frequency: 460, frequencyEnd: 300, duration: 0.06, release: 0.05, volume: 0.028, type: "square", pan });
+    playSynthTone({ frequency: 680, frequencyEnd: 880, duration: 0.04, release: 0.03, volume: 0.018, type: "triangle", pan, delay: 0.028 });
+    return;
+  }
+  if (phase === "preview") {
+    playSynthTone({ frequency: 380, frequencyEnd: 420, duration: 0.08, release: 0.06, volume: 0.024, type: "triangle", pan });
+    return;
+  }
+  if (phase === "package") {
+    playSynthTone({ frequency: 680, frequencyEnd: 520, duration: 0.05, release: 0.04, volume: 0.026, type: "square", pan });
+    return;
+  }
+  if (phase === "transfer") {
+    playSynthTone({ frequency: 520, frequencyEnd: 920, duration: 0.08, release: 0.06, volume: 0.032, type: "sawtooth", pan });
+    return;
+  }
+  if (phase === "implant") {
+    playSynthTone({ frequency: 440, frequencyEnd: 660, duration: 0.06, release: 0.05, volume: 0.03, type: "triangle", pan });
+    playSynthTone({ frequency: 660, frequencyEnd: 880, duration: 0.05, release: 0.05, volume: 0.022, type: "square", pan, delay: 0.03 });
+    return;
+  }
+  if (phase === "release") {
+    playSynthTone({ frequency: 320, frequencyEnd: 480, duration: 0.12, release: 0.08, volume: 0.038, type: "triangle", pan: 0 });
+    playSynthTone({ frequency: 480, frequencyEnd: 720, duration: 0.1, release: 0.07, volume: 0.025, type: "square", pan: 0, delay: 0.05 });
+  }
+}
+
+function updateExtinctionAudio() {
+  const scene = state.extinctionScene;
+  if (!scene) {
+    audioState.activeExtinctionScene = null;
+    audioState.lastExtinctionPhase = "";
+    return;
+  }
+
+  if (audioState.activeExtinctionScene !== scene) {
+    audioState.activeExtinctionScene = scene;
+    audioState.lastExtinctionPhase = "enter";
+    audioState.lastCapturePulseTick = -9999;
+    audioState.lastScanPulseTick = -9999;
+    playExtinctionPhaseTone("enter");
+  }
+
+  const scanProgress = scene.sourceBrain ? smooth01(clamp(scene.frame / Math.max(1, scene.scanFrames), 0, 1)) : 1;
+  const pullProgress = scene.sourceSpecimen
+    ? smooth01(clamp((scanProgress - 0.06) / 0.46, 0, 1))
+    : 1;
+  const headScanProgress = scene.sourceBrain
+    ? smooth01(clamp((scanProgress - 0.6) / 0.34, 0, 1))
+    : 1;
+
+  if (scene.frame < scene.scanFrames) {
+    if (pullProgress < 0.995) {
+      if (state.tick - audioState.lastCapturePulseTick >= 14) {
+        audioState.lastCapturePulseTick = state.tick;
+        playExtinctionPhaseTone("capture");
+      }
+    } else if (headScanProgress < 0.995) {
+      if (state.tick - audioState.lastScanPulseTick >= 10) {
+        audioState.lastScanPulseTick = state.tick;
+        playExtinctionPhaseTone("scan");
+      }
+    } else if (audioState.lastExtinctionPhase !== "scan-locked") {
+      audioState.lastExtinctionPhase = "scan-locked";
+      playExtinctionPhaseTone("scan-locked");
+    }
+    return;
+  }
+
+  const generationFrame = Math.max(0, scene.frame - scene.scanFrames);
+  let activeIndex = -1;
+  for (let slotIndex = 0; slotIndex < scene.slotTimings.length; slotIndex += 1) {
+    const slotTiming = scene.slotTimings[slotIndex];
+    if (generationFrame >= slotTiming.startFrame && generationFrame < slotTiming.endFrame) {
+      activeIndex = slotIndex;
+      break;
+    }
+  }
+
+  if (activeIndex < 0) {
+    return;
+  }
+
+  const planIndex = scene.generationOrder[activeIndex];
+  const plan = scene.plans[planIndex];
+  const slotTiming = scene.slotTimings[activeIndex];
+  const planState = getExtinctionPlanProgress(scene, slotTiming, plan);
+  let phase = "build";
+
+  if (planState.packageActive) {
+    phase = "package";
+  } else if (planState.cubeTravelActive) {
+    phase = "transfer";
+  } else if (planState.implantActive) {
+    phase = "implant";
+  } else if (planState.previewActive) {
+    phase = "preview";
+  } else if (planState.mutationProgress > 0.01 || planState.mutationPauseActive) {
+    phase = "mutate";
+  }
+
+  const phaseKey = `${activeIndex}:${phase}:${plan.inherited ? "dna" : "rnd"}`;
+  if (phaseKey !== audioState.lastExtinctionPhase) {
+    audioState.lastExtinctionPhase = phaseKey;
+    playExtinctionPhaseTone(phase, plan.inherited, activeIndex);
+  }
+}
+
+function buildControlDeck() {
+  controlDeck.innerHTML = CONTROL_DEFS.map((def) => `
+    <div class="control-card">
+      <div class="control-top">
+        <label for="control-${def.key}">${def.label}</label>
+        <strong class="control-value" id="value-${def.key}">${formatControlValue(def, CONFIG[def.key])}</strong>
+      </div>
+      <p class="control-meta">${def.note}</p>
+      <input
+        id="control-${def.key}"
+        class="control-slider"
+        type="range"
+        min="${def.min}"
+        max="${def.max}"
+        step="${def.step}"
+        value="${CONFIG[def.key]}"
+        data-key="${def.key}"
+      >
+    </div>
+  `).join("");
+
+  for (let i = 0; i < CONTROL_DEFS.length; i += 1) {
+    const def = CONTROL_DEFS[i];
+    const input = document.getElementById(`control-${def.key}`);
+    const value = document.getElementById(`value-${def.key}`);
+    controlElements[def.key] = { input, value, def };
+    input.addEventListener("input", () => {
+      applyControlValue(def, Number(input.value));
+    });
+  }
+}
+
+function updateControlDisplay(key) {
+  const control = controlElements[key];
+  if (!control) {
+    return;
+  }
+  control.input.value = String(CONFIG[key]);
+  control.value.textContent = formatControlValue(control.def, CONFIG[key]);
+}
+
+function trimFoodToCap() {
+  if (state.foods.length > CONFIG.maxFood) {
+    state.foods.length = CONFIG.maxFood;
+  }
+}
+
+function clampCreatureSpeeds() {
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    const creature = state.creatures[i];
+    const speed = Math.hypot(creature.vx, creature.vy);
+    if (speed > CONFIG.maxSpeed) {
+      const scale = CONFIG.maxSpeed / speed;
+      creature.vx *= scale;
+      creature.vy *= scale;
+    }
+  }
+}
+
+function enforcePopulationCap() {
+  const overflow = state.creatures.length - CONFIG.maxCreatures;
+  if (overflow <= 0) {
+    return;
+  }
+
+  const ranked = state.creatures
+    .map((creature, index) => ({ creature, index }))
+    .sort((a, b) => {
+      if (a.creature.energy !== b.creature.energy) {
+        return a.creature.energy - b.creature.energy;
+      }
+      return a.creature.age - b.creature.age;
+    });
+
+  const removalIndices = ranked
+    .slice(0, overflow)
+    .map((entry) => entry.index)
+    .sort((a, b) => b - a);
+
+  for (let i = 0; i < removalIndices.length; i += 1) {
+    const index = removalIndices[i];
+    const creature = state.creatures[index];
+    recordArchive(creature, false);
+    spawnSpark(creature.x, creature.y, "#ff6db3", 6);
+    state.creatures.splice(index, 1);
+  }
+}
+
+function syncConfigToWorld(key) {
+  if (key === "maxFood") {
+    trimFoodToCap();
+  }
+
+  if (key === "maxCreatures") {
+    enforcePopulationCap();
+    chooseFeaturedCreature();
+    state.networkDisplay = null;
+  }
+
+  if (key === "energyFromFood") {
+    for (let i = 0; i < state.foods.length; i += 1) {
+      state.foods[i].energy = CONFIG.energyFromFood;
+    }
+  }
+
+  if (key === "maxSpeed") {
+    clampCreatureSpeeds();
+  }
+
+  if (key === "soundVolume") {
+    updateMasterVolume();
+  }
+}
+
+function applyControlValue(def, rawValue) {
+  const precision = getStepPrecision(def.step);
+  const clampedValue = clamp(rawValue, def.min, def.max);
+  const nextValue = Number(clampedValue.toFixed(precision));
+  CONFIG[def.key] = nextValue;
+  syncConfigToWorld(def.key);
+  updateControlDisplay(def.key);
+}
+
+function resetControlDeck() {
+  for (let i = 0; i < CONTROL_DEFS.length; i += 1) {
+    const def = CONTROL_DEFS[i];
+    applyControlValue(def, DEFAULT_CONFIG[def.key]);
+  }
+}
+
+function randomWeight() {
+  return rand(-1, 1);
+}
+
+function createBrain(parentBrain) {
+  if (parentBrain) {
+    return mutateBrain(parentBrain);
+  }
+
+  const layerSizes = [INPUT_LABELS.length, ...CONFIG.hiddenLayerSizes, OUTPUT_LABELS.length];
+  const weights = [];
+  const biases = [];
+
+  for (let layerIndex = 0; layerIndex < layerSizes.length - 1; layerIndex += 1) {
+    weights.push(
+      Array.from({ length: layerSizes[layerIndex + 1] }, () =>
+        Array.from({ length: layerSizes[layerIndex] }, randomWeight)
+      )
+    );
+    biases.push(Array.from({ length: layerSizes[layerIndex + 1] }, randomWeight));
+  }
+
+  return { weights, biases };
+}
+
+function cloneBrain(brain) {
+  return {
+    weights: brain.weights.map((layer) => layer.map((row) => row.slice())),
+    biases: brain.biases.map((layer) => layer.slice())
+  };
+}
+
+function mutateValue(value) {
+  if (Math.random() < CONFIG.mutationRate) {
+    return clamp(value + rand(-CONFIG.mutationScale, CONFIG.mutationScale), -1.6, 1.6);
+  }
+  return value;
+}
+
+function mutateBrain(parentBrain) {
+  const brain = cloneBrain(parentBrain);
+  brain.weights = brain.weights.map((layer) => layer.map((row) => row.map(mutateValue)));
+  brain.biases = brain.biases.map((layer) => layer.map(mutateValue));
+  return brain;
+}
+
+function forwardBrain(brain, inputs) {
+  const hiddenLayers = [];
+  let activations = inputs.slice();
+
+  for (let layerIndex = 0; layerIndex < brain.weights.length; layerIndex += 1) {
+    const isOutputLayer = layerIndex === brain.weights.length - 1;
+    const nextActivations = brain.weights[layerIndex].map((weights, nodeIndex) => {
+      let sum = brain.biases[layerIndex][nodeIndex];
+      for (let i = 0; i < weights.length; i += 1) {
+        sum += weights[i] * activations[i];
+      }
+      return isOutputLayer ? sigmoid(sum) : Math.tanh(sum);
+    });
+
+    if (!isOutputLayer) {
+      hiddenLayers.push(nextActivations);
+    }
+    activations = nextActivations;
+  }
+
+  return { hiddenLayers, outputs: activations };
+}
+
+function buildWallSensorPoints() {
+  const points = [];
+  for (let x = 0; x <= WIDTH; x += CONFIG.wallPointGap) {
+    points.push({ x, y: 0, kind: "wall" });
+    points.push({ x, y: HEIGHT, kind: "wall" });
+  }
+  for (let y = CONFIG.wallPointGap; y < HEIGHT; y += CONFIG.wallPointGap) {
+    points.push({ x: 0, y, kind: "wall" });
+    points.push({ x: WIDTH, y, kind: "wall" });
+  }
+  return points;
+}
+
+function randomInteriorPosition(radius) {
+  return {
+    x: rand(radius + 20, WIDTH - radius - 20),
+    y: rand(radius + 20, HEIGHT - radius - 20)
+  };
+}
+
+function getLivingCreaturesCount() {
+  let count = 0;
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    if (state.creatures[i].alive) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function getTelemetrySnapshot() {
+  let population = 0;
+  let totalEnergy = 0;
+  let totalAge = 0;
+
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    const creature = state.creatures[i];
+    if (!creature.alive) {
+      continue;
+    }
+
+    population += 1;
+    totalEnergy += creature.energy;
+    totalAge += creature.age;
+  }
+
+  return {
+    population,
+    food: state.foods.length,
+    avgEnergy: population > 0 ? totalEnergy / population : 0,
+    avgAge: population > 0 ? totalAge / population : 0
+  };
+}
+
+function pushTelemetrySample(force = false) {
+  if (!force) {
+    state.telemetrySampleClock += 1;
+    if (state.telemetrySampleClock < TELEMETRY_SAMPLE_INTERVAL) {
+      return;
+    }
+  }
+
+  state.telemetrySampleClock = 0;
+  state.telemetryHistory.push(getTelemetrySnapshot());
+  if (state.telemetryHistory.length > TELEMETRY_HISTORY_LIMIT) {
+    state.telemetryHistory.splice(0, state.telemetryHistory.length - TELEMETRY_HISTORY_LIMIT);
+  }
+}
+
+function resetTelemetryHistory() {
+  state.telemetryHistory.length = 0;
+  state.telemetrySampleClock = 0;
+  pushTelemetrySample(true);
+}
+
+function cloneExtinctionSpecimen(creature) {
+  return {
+    x: creature.x,
+    y: creature.y,
+    heading: creature.heading,
+    hue: creature.hue,
+    energy: creature.energy,
+    age: creature.age,
+    generation: creature.generation,
+    segmentGene: creature.segmentGene,
+    lifeStage: creature.lifeStage === "juvenile" || creature.lifeStage === "egg"
+      ? creature.lifeStage
+      : "adult",
+    brain: cloneBrain(creature.brain)
+  };
+}
+
+function createCreature(parent = null, options = {}) {
+  const radius = CONFIG.creatureRadius;
+  const position = options.positionOverride
+    ? {
+        x: clamp(options.positionOverride.x, radius + 2, WIDTH - radius - 2),
+        y: clamp(options.positionOverride.y, radius + 2, HEIGHT - radius - 2)
+      }
+    : parent
+      ? {
+          x: clamp(parent.x + rand(-18, 18), radius + 2, WIDTH - radius - 2),
+          y: clamp(parent.y + rand(-18, 18), radius + 2, HEIGHT - radius - 2)
+        }
+      : randomInteriorPosition(radius);
+
+  const hue = options.hueOverride !== undefined
+    ? normalizeHueValue(options.hueOverride)
+    : normalizeHueValue(parent ? parent.hue + rand(-12, 12) : rand(20, 65));
+  const brain = options.brainOverride
+    ? cloneBrain(options.brainOverride)
+    : parent
+      ? createBrain(parent.brain)
+      : createBrain();
+  const lifeStage = options.lifeStage || "adult";
+  const generation = options.generationOverride ?? (parent ? parent.generation + 1 : 1);
+  const velocity = options.velocityOverride || { vx: rand(-0.6, 0.6), vy: rand(-0.6, 0.6) };
+  const energy = options.energyOverride ?? (parent ? CONFIG.startingEnergy * 0.82 : CONFIG.startingEnergy);
+  const heading = options.headingOverride ?? rand(0, TAU);
+  const segmentGene = options.segmentGeneOverride !== undefined
+    ? clampSegmentGene(options.segmentGeneOverride)
+    : parent
+      ? mutateSegmentGene(parent.segmentGene)
+      : randomSegmentGene();
+
+  return {
+    id: state.nextCreatureId++,
+    x: position.x,
+    y: position.y,
+    vx: velocity.vx,
+    vy: velocity.vy,
+    heading,
+    radius,
+    energy,
+    age: 0,
+    generation,
+    children: 0,
+    hue,
+    segmentGene,
+    brain,
+    senses: null,
+    hiddenLayers: CONFIG.hiddenLayerSizes.map((size) => Array(size).fill(0)),
+    outputs: Array(OUTPUT_LABELS.length).fill(0),
+    memoryState: Array(CONFIG.memoryNeuronCount).fill(0),
+    memoryWrite: Array(CONFIG.memoryNeuronCount).fill(0),
+    forwardDrive: 0,
+    sideDrive: 0,
+    displayForwardDrive: 0,
+    displaySideDrive: 0,
+    turnVelocity: 0,
+    displayTurnVelocity: 0,
+    movePhase: rand(0, TAU),
+    segmentBodies: [],
+    recentAction: lifeStage === "egg" ? "EGG" : "FORWARD",
+    lifeStage,
+    eggTimer: lifeStage === "egg" ? CONFIG.eggHatchFrames : 0,
+    growthTimer: lifeStage === "juvenile" ? CONFIG.juvenileGrowthFrames : 0,
+    deathTimer: 0,
+    deathSpin: rand(-0.18, 0.18),
+    alive: true
+  };
+}
+
+function createFood() {
+  const radius = CONFIG.foodRadius;
+  const position = randomInteriorPosition(radius);
+  return {
+    x: position.x,
+    y: position.y,
+    radius,
+    energy: CONFIG.energyFromFood,
+    age: 0,
+    pulse: rand(0, TAU)
+  };
+}
+
+function getCreatureGrowthScale(creature) {
+  if (creature.lifeStage === "egg") {
+    return 0.66;
+  }
+
+  if (creature.lifeStage === "juvenile") {
+    const growth = 1 - clamp(creature.growthTimer / CONFIG.juvenileGrowthFrames, 0, 1);
+    return 0.58 + growth * 0.42;
+  }
+
+  if (!creature.alive) {
+    const deathProgress = 1 - clamp(creature.deathTimer / CONFIG.deathAnimationFrames, 0, 1);
+    return 1 - deathProgress * 0.28;
+  }
+
+  return 1;
+}
+
+function getCreatureBodyMetrics(creature) {
+  const lifeScale = getCreatureGrowthScale(creature);
+  const energyRatio = clamp(creature.energy / CONFIG.maxEnergy, 0.08, 1);
+  const headLength = Math.round((14 + energyRatio * 5) * lifeScale);
+  const headHeight = Math.round((6 + energyRatio * 8) * lifeScale);
+  const headOuterWidth = Math.max(10, Math.round(headLength * 1.02));
+  const headOuterHeight = Math.max(7, Math.round(headHeight * 1.02));
+  const headInnerWidth = Math.max(8, Math.round(headOuterWidth * 0.9));
+  const headInnerHeight = Math.max(6, Math.round(headOuterHeight * 0.88));
+  const headFillWidth = Math.max(7, Math.round(headOuterWidth * 0.8));
+  const headFillHeight = Math.max(5, Math.round(headOuterHeight * 0.78));
+  const tailAnchorLocal = {
+    x: -Math.round(headLength * 0.46),
+    y: 0
+  };
+  const segmentLayout = buildSegmentedBodyLayout(creature, headLength, headHeight, lifeScale, tailAnchorLocal);
+
+  return {
+    lifeScale,
+    energyRatio,
+    headLength,
+    headHeight,
+    headOuterWidth,
+    headOuterHeight,
+    headInnerWidth,
+    headInnerHeight,
+    headFillWidth,
+    headFillHeight,
+    headRadius: Math.max(headOuterWidth, headOuterHeight) * 0.46,
+    leftEyeLocal: {
+      x: Math.round(headLength * 0.16),
+      y: -Math.max(3, Math.round(headHeight * 0.3)) + 1
+    },
+    rightEyeLocal: {
+      x: Math.round(headLength * 0.16),
+      y: Math.max(1, Math.round(headHeight * 0.12)) + 1
+    },
+    mouthLocal: {
+      x: Math.round(headLength * 0.46),
+      y: 0
+    },
+    tailAnchorLocal,
+    segmentLayout
+  };
+}
+
+function bodyLocalToWorld(creature, metrics, localX, localY) {
+  const cos = Math.cos(creature.heading);
+  const sin = Math.sin(creature.heading);
+
+  return {
+    x: creature.x + localX * cos - localY * sin,
+    y: creature.y + localX * sin + localY * cos
+  };
+}
+
+function getAdultSegmentCount(creature) {
+  return clampSegmentGene(creature.segmentGene);
+}
+
+function getSegmentSpacing(headLength, lifeScale, progress) {
+  const baseSpacing = headLength * (0.44 - progress * 0.06) + 2;
+  return Math.max(6, Math.round(baseSpacing * lifeScale));
+}
+
+function ensureCreatureSegmentBodies(creature, bodyMetrics) {
+  if (creature.lifeStage === "egg") {
+    creature.segmentBodies.length = 0;
+    return;
+  }
+
+  const adultCount = getAdultSegmentCount(creature);
+  if (creature.segmentBodies.length > adultCount) {
+    creature.segmentBodies.length = adultCount;
+  }
+
+  const anchor = bodyLocalToWorld(
+    creature,
+    bodyMetrics,
+    bodyMetrics.tailAnchorLocal.x,
+    bodyMetrics.tailAnchorLocal.y
+  );
+  let parentX = anchor.x;
+  let parentY = anchor.y;
+  let parentAngle = creature.heading;
+
+  for (let i = 0; i < adultCount; i += 1) {
+    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+    const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+    let segment = creature.segmentBodies[i];
+
+    if (!segment) {
+      segment = {
+        x: parentX - Math.cos(parentAngle) * spacing,
+        y: parentY - Math.sin(parentAngle) * spacing,
+        vx: 0,
+        vy: 0,
+        angle: parentAngle
+      };
+      creature.segmentBodies.push(segment);
+    } else if (
+      !Number.isFinite(segment.x) ||
+      !Number.isFinite(segment.y) ||
+      !Number.isFinite(segment.angle)
+    ) {
+      segment.x = parentX - Math.cos(parentAngle) * spacing;
+      segment.y = parentY - Math.sin(parentAngle) * spacing;
+      segment.vx = 0;
+      segment.vy = 0;
+      segment.angle = parentAngle;
+    }
+
+    parentX = segment.x;
+    parentY = segment.y;
+    parentAngle = segment.angle;
+  }
+}
+
+function relaxCreatureSegments(creature, iterations = 1) {
+  if (creature.lifeStage === "egg") {
+    creature.segmentBodies.length = 0;
+    return;
+  }
+
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  ensureCreatureSegmentBodies(creature, bodyMetrics);
+  const adultCount = getAdultSegmentCount(creature);
+  if (adultCount <= 0) {
+    return;
+  }
+
+  const normalizedTurn = CONFIG.maxTurnSpeed > 0
+    ? clamp(creature.displayTurnVelocity / CONFIG.maxTurnSpeed, -1, 1)
+    : 0;
+
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const anchor = bodyLocalToWorld(
+      creature,
+      bodyMetrics,
+      bodyMetrics.tailAnchorLocal.x,
+      bodyMetrics.tailAnchorLocal.y
+    );
+    let parentX = anchor.x;
+    let parentY = anchor.y;
+    let parentAngle = creature.heading;
+
+    for (let i = 0; i < adultCount; i += 1) {
+      const segment = creature.segmentBodies[i];
+      const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+      const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+      const stiffness = CONFIG.segmentFollowStiffness * (0.98 - progress * 0.28);
+      const anchorX = parentX - Math.cos(parentAngle) * spacing;
+      const anchorY = parentY - Math.sin(parentAngle) * spacing;
+
+      segment.vx = (segment.vx + (anchorX - segment.x) * stiffness) * CONFIG.segmentVelocityDamping;
+      segment.vy = (segment.vy + (anchorY - segment.y) * stiffness) * CONFIG.segmentVelocityDamping;
+      const segmentSpeed = Math.hypot(segment.vx, segment.vy);
+      if (segmentSpeed > CONFIG.segmentMaxSpeed) {
+        const scale = CONFIG.segmentMaxSpeed / segmentSpeed;
+        segment.vx *= scale;
+        segment.vy *= scale;
+      }
+      segment.x += segment.vx;
+      segment.y += segment.vy;
+
+      const dx = parentX - segment.x;
+      const dy = parentY - segment.y;
+      const distance = Math.hypot(dx, dy) || 0.0001;
+      const correction =
+        (distance - spacing) *
+        (CONFIG.segmentConstraintPull * (0.94 - progress * 0.16));
+      segment.x += (dx / distance) * correction;
+      segment.y += (dy / distance) * correction;
+
+      const chainAngle = Math.atan2(parentY - segment.y, parentX - segment.x);
+      segment.angle = dampAngle(
+        segment.angle,
+        chainAngle,
+        CONFIG.segmentAngleFollow * (0.94 - progress * 0.14) + Math.abs(normalizedTurn) * 0.045
+      );
+      segment.angle = dampAngle(
+        segment.angle,
+        parentAngle,
+        CONFIG.segmentAngleCarry * (0.82 - progress * 0.26)
+      );
+
+      const maxBend = 0.28 +
+        Math.abs(normalizedTurn) *
+        CONFIG.segmentTurnCurlStrength *
+        (0.14 + progress * 0.13);
+      segment.angle = parentAngle + clamp(
+        normalizeAngle(segment.angle - parentAngle),
+        -maxBend,
+        maxBend
+      );
+
+      parentX = segment.x;
+      parentY = segment.y;
+      parentAngle = segment.angle;
+    }
+  }
+}
+
+function buildCreatureCollisionBodies(creature, bodyMetrics) {
+  const bodies = [
+    {
+      type: "head",
+      creature,
+      x: creature.x,
+      y: creature.y,
+      radius: bodyMetrics.headRadius
+    }
+  ];
+
+  for (let i = 0; i < bodyMetrics.segmentLayout.segments.length; i += 1) {
+    const segment = bodyMetrics.segmentLayout.segments[i];
+    bodies.push({
+      type: "segment",
+      creature,
+      segment,
+      segmentState: creature.segmentBodies[i],
+      x: segment.x,
+      y: segment.y,
+      radius: segment.radius
+    });
+  }
+
+  return bodies;
+}
+
+function applyCollisionDisplacement(body, dx, dy, velocityScale = 0.16) {
+  body.x += dx;
+  body.y += dy;
+
+  if (body.type === "head") {
+    body.creature.x += dx;
+    body.creature.y += dy;
+    body.creature.vx += dx * velocityScale;
+    body.creature.vy += dy * velocityScale;
+    return;
+  }
+
+  if (!body.segmentState) {
+    return;
+  }
+
+  body.segmentState.x += dx;
+  body.segmentState.y += dy;
+  body.segmentState.vx += dx * velocityScale;
+  body.segmentState.vy += dy * velocityScale;
+  body.creature.vx += dx * CONFIG.segmentCollisionTransfer;
+  body.creature.vy += dy * CONFIG.segmentCollisionTransfer;
+}
+
+function resolveCreatureWallCollisions(creature) {
+  if (creature.lifeStage === "egg") {
+    return;
+  }
+
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  const bodies = buildCreatureCollisionBodies(creature, bodyMetrics);
+  let bounced = false;
+  let sparkX = creature.x;
+  let sparkY = creature.y;
+
+  for (let i = 0; i < bodies.length; i += 1) {
+    const body = bodies[i];
+    const minX = body.radius;
+    const maxX = WIDTH - body.radius;
+    const minY = body.radius;
+    const maxY = HEIGHT - body.radius;
+    let pushX = 0;
+    let pushY = 0;
+
+    if (body.x < minX) {
+      pushX = minX - body.x;
+    } else if (body.x > maxX) {
+      pushX = maxX - body.x;
+    }
+
+    if (body.y < minY) {
+      pushY = minY - body.y;
+    } else if (body.y > maxY) {
+      pushY = maxY - body.y;
+    }
+
+    if (pushX === 0 && pushY === 0) {
+      continue;
+    }
+
+    bounced = true;
+    sparkX = body.x + pushX;
+    sparkY = body.y + pushY;
+
+    if (body.type === "head") {
+      body.x += pushX;
+      body.y += pushY;
+      creature.x += pushX;
+      creature.y += pushY;
+      if (pushX !== 0) {
+        creature.vx = -creature.vx * 0.7;
+      }
+      if (pushY !== 0) {
+        creature.vy = -creature.vy * 0.7;
+      }
+    } else if (body.segmentState) {
+      body.x += pushX;
+      body.y += pushY;
+      body.segmentState.x += pushX;
+      body.segmentState.y += pushY;
+      if (pushX !== 0) {
+        body.segmentState.vx = -body.segmentState.vx * CONFIG.segmentWallBounce;
+      }
+      if (pushY !== 0) {
+        body.segmentState.vy = -body.segmentState.vy * CONFIG.segmentWallBounce;
+      }
+    }
+  }
+
+  if (bounced) {
+    creature.energy -= CONFIG.collisionCost * 0.6;
+    spawnSpark(sparkX, sparkY, "#66dcff", 5);
+    relaxCreatureSegments(creature, 2);
+  }
+}
+
+function killCreature(creature) {
+  if (!creature.alive) {
+    return;
+  }
+
+  const wasLastLiving = getLivingCreaturesCount() <= 1;
+  creature.alive = false;
+  creature.lifeStage = "dying";
+  creature.deathTimer = CONFIG.deathAnimationFrames;
+  creature.vx *= 0.35;
+  creature.vy *= 0.35;
+  creature.forwardDrive = 0;
+  creature.sideDrive = 0;
+  creature.displayForwardDrive = 0;
+  creature.displaySideDrive = 0;
+  creature.turnVelocity = 0;
+  creature.displayTurnVelocity = 0;
+  creature.outputs = Array(OUTPUT_LABELS.length).fill(0);
+  creature.memoryWrite = Array(CONFIG.memoryNeuronCount).fill(0);
+  creature.recentAction = "DEAD";
+  recordArchive(creature);
+  if (wasLastLiving) {
+    state.extinctionSpecimen = cloneExtinctionSpecimen(creature);
+  }
+  spawnSpark(creature.x, creature.y, "#ff6db3", 10);
+  playDeathSound(creature.x);
+}
+
+function updateEgg(creature) {
+  creature.eggTimer -= 1;
+  creature.movePhase += 0.08;
+  creature.turnVelocity *= 0.65;
+  creature.displayTurnVelocity = damp(creature.displayTurnVelocity, 0, 0.18);
+  creature.vx *= 0.7;
+  creature.vy *= 0.7;
+  creature.x = clamp(creature.x + creature.vx * 0.18, creature.radius, WIDTH - creature.radius);
+  creature.y = clamp(creature.y + creature.vy * 0.18, creature.radius, HEIGHT - creature.radius);
+  creature.recentAction = "EGG";
+
+  if (creature.eggTimer <= 0) {
+    creature.lifeStage = "juvenile";
+    creature.growthTimer = CONFIG.juvenileGrowthFrames;
+    relaxCreatureSegments(creature, 2);
+    creature.recentAction = "HATCH";
+    spawnSpark(creature.x, creature.y, "#dffcff", 12);
+    playHatchSound(creature.x);
+  }
+}
+
+function updateDyingCreature(creature) {
+  creature.deathTimer -= 1;
+  creature.movePhase += 0.12;
+  creature.heading += creature.deathSpin;
+  creature.displayTurnVelocity = damp(creature.displayTurnVelocity, creature.deathSpin, 0.12);
+  creature.vx *= 0.92;
+  creature.vy *= 0.92;
+  creature.x += creature.vx * 0.3;
+  creature.y += creature.vy * 0.3;
+  resolveCreatureWallCollisions(creature);
+  relaxCreatureSegments(creature, 2);
+}
+
+function buildIncubationPositions(count) {
+  const positions = [];
+  const columns = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
+  const rows = Math.ceil(count / columns);
+  const startX = WIDTH * 0.24;
+  const endX = WIDTH * 0.76;
+  const startY = HEIGHT * 0.6;
+  const endY = HEIGHT * 0.82;
+
+  for (let i = 0; i < count; i += 1) {
+    const column = i % columns;
+    const row = Math.floor(i / columns);
+    const xBase = columns === 1 ? WIDTH * 0.5 : lerp(startX, endX, column / (columns - 1));
+    const yBase = rows === 1 ? HEIGHT * 0.72 : lerp(startY, endY, row / Math.max(1, rows - 1));
+    positions.push({
+      x: xBase + rand(-22, 22),
+      y: yBase + rand(-16, 16)
+    });
+  }
+
+  return positions;
+}
+
+function summarizeBrainMutation(baseBrain, mutatedBrain) {
+  if (!baseBrain || !mutatedBrain) {
+    return null;
+  }
+
+  let changedWeights = 0;
+  let changedBiases = 0;
+  let maxDelta = 0;
+  const weightHighlights = [];
+  const biasHighlights = [];
+
+  for (let layerIndex = 0; layerIndex < mutatedBrain.weights.length; layerIndex += 1) {
+    for (let rowIndex = 0; rowIndex < mutatedBrain.weights[layerIndex].length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < mutatedBrain.weights[layerIndex][rowIndex].length; colIndex += 1) {
+        const delta =
+          mutatedBrain.weights[layerIndex][rowIndex][colIndex] -
+          baseBrain.weights[layerIndex][rowIndex][colIndex];
+
+        if (Math.abs(delta) > 0.0001) {
+          changedWeights += 1;
+          maxDelta = Math.max(maxDelta, Math.abs(delta));
+          weightHighlights.push({ layerIndex, rowIndex, colIndex, delta });
+        }
+      }
+    }
+
+    for (let nodeIndex = 0; nodeIndex < mutatedBrain.biases[layerIndex].length; nodeIndex += 1) {
+      const delta =
+        mutatedBrain.biases[layerIndex][nodeIndex] -
+        baseBrain.biases[layerIndex][nodeIndex];
+
+      if (Math.abs(delta) > 0.0001) {
+        changedBiases += 1;
+        maxDelta = Math.max(maxDelta, Math.abs(delta));
+        biasHighlights.push({ layerIndex, nodeIndex, delta });
+      }
+    }
+  }
+
+  weightHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  biasHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  return {
+    changedWeights,
+    changedBiases,
+    maxDelta,
+    weightHighlights: weightHighlights.slice(0, 6),
+    biasHighlights: biasHighlights.slice(0, 3)
+  };
+}
+
+function buildExtinctionScene() {
+  const desiredSeeds = Math.max(8, Math.floor(CONFIG.initialCreatures * 0.7));
+  const seeds = Math.min(desiredSeeds, CONFIG.maxCreatures);
+  const hasSourceBrain = Boolean(state.extinctionCandidateBrain);
+  const inheritedSeeds = hasSourceBrain ? Math.min(4, seeds) : 0;
+  const scanLeadFrames = hasSourceBrain ? 196 : 72;
+  const inheritedPlanFrames = hasSourceBrain ? 292 : 0;
+  const randomPlanFrames = hasSourceBrain ? 48 : 72;
+  const outroFrames = 96;
+  const positions = buildIncubationPositions(seeds);
+  const plans = [];
+
+  for (let i = 0; i < seeds; i += 1) {
+    const inherited = i < inheritedSeeds;
+    const brain = inherited
+      ? mutateBrain(state.extinctionCandidateBrain)
+      : createBrain();
+    const segmentGene = inherited
+      ? mutateSegmentGene(state.extinctionCandidateSegmentGene)
+      : randomSegmentGene();
+    const hue = inherited
+      ? normalizeHueValue(state.extinctionCandidateHue + rand(-12, 12))
+      : normalizeHueValue(rand(20, 65));
+
+    plans.push({
+      inherited,
+      brain,
+      hue,
+      segmentGene,
+      generation: inherited ? state.extinctionCandidateGeneration + 1 : 1,
+      position: positions[i],
+      heading: rand(0, TAU),
+      mutationSummary: inherited
+        ? summarizeBrainMutation(state.extinctionCandidateBrain, brain)
+        : null
+    });
+  }
+
+  const generationOrder = plans
+    .map((plan, index) => ({ plan, index }))
+    .sort((a, b) => {
+      if (a.plan.inherited !== b.plan.inherited) {
+        return a.plan.inherited ? -1 : 1;
+      }
+      if (a.plan.position.x !== b.plan.position.x) {
+        return a.plan.position.x - b.plan.position.x;
+      }
+      return a.plan.position.y - b.plan.position.y;
+    })
+    .map((entry) => entry.index);
+  const generationSlotByPlanIndex = Array(plans.length).fill(0);
+
+  for (let slotIndex = 0; slotIndex < generationOrder.length; slotIndex += 1) {
+    generationSlotByPlanIndex[generationOrder[slotIndex]] = slotIndex;
+  }
+
+  const slotTimings = [];
+  let generationFramesTotal = 0;
+
+  for (let slotIndex = 0; slotIndex < generationOrder.length; slotIndex += 1) {
+    const planIndex = generationOrder[slotIndex];
+    const plan = plans[planIndex];
+    const durationFrames = plan.inherited ? inheritedPlanFrames : randomPlanFrames;
+
+    slotTimings.push({
+      slotIndex,
+      planIndex,
+      startFrame: generationFramesTotal,
+      durationFrames,
+      endFrame: generationFramesTotal + durationFrames
+    });
+
+    generationFramesTotal += durationFrames;
+  }
+
+  const totalFrames = Math.max(
+    CONFIG.extinctionDelay,
+    scanLeadFrames + generationFramesTotal + outroFrames
+  );
+
+  return {
+    frame: 0,
+    totalFrames,
+    scanFrames: scanLeadFrames,
+    outroFrames,
+    generationFramesTotal,
+    sourceBrain: hasSourceBrain ? cloneBrain(state.extinctionCandidateBrain) : null,
+    sourceHue: state.extinctionCandidateHue,
+    sourceGeneration: state.extinctionCandidateGeneration,
+    sourceSpecimen: state.extinctionSpecimen
+      ? {
+          ...state.extinctionSpecimen,
+          brain: cloneBrain(state.extinctionSpecimen.brain)
+        }
+      : null,
+    plans,
+    generationOrder,
+    generationSlotByPlanIndex,
+    slotTimings,
+    inheritedSeeds,
+    randomSeeds: seeds - inheritedSeeds
+  };
+}
+
+function seedWorld() {
+  state.creatures.length = 0;
+  state.foods.length = 0;
+  state.sparks.length = 0;
+  state.births = 0;
+  state.tick = 0;
+  state.lineageTick = 0;
+  state.featured = null;
+  state.extinctionCount = 0;
+  state.extinctionLogged = false;
+  state.extinctionCandidateBrain = null;
+  state.extinctionCandidateHue = 42;
+  state.extinctionCandidateAge = 0;
+  state.extinctionCandidateGeneration = 1;
+  state.extinctionCandidateSegmentGene = 5;
+  state.recentExtinctionBrain = null;
+  state.recentExtinctionHue = 42;
+  state.recentExtinctionGeneration = 1;
+  state.recentExtinctionSegmentGene = 5;
+  state.extinctionSpecimen = null;
+  state.extinctionScene = null;
+
+  const startingCreatures = Math.min(CONFIG.initialCreatures, CONFIG.maxCreatures);
+  const startingFood = Math.min(CONFIG.initialFood, CONFIG.maxFood);
+
+  for (let i = 0; i < startingCreatures; i += 1) {
+    state.creatures.push(createCreature());
+  }
+
+  for (let i = 0; i < startingFood; i += 1) {
+    state.foods.push(createFood());
+  }
+
+  resetTelemetryHistory();
+}
+
+function createStartupScene() {
+  return {
+    frame: 0,
+    totalFrames: CONFIG.startupIntroFrames,
+    creatureTarget: Math.min(CONFIG.initialCreatures, CONFIG.maxCreatures),
+    foodTarget: Math.min(CONFIG.initialFood, CONFIG.maxFood)
+  };
+}
+
+function updateStartupScene() {
+  if (!state.startupScene) {
+    return;
+  }
+
+  state.startupScene.frame += 1;
+  if (state.startupScene.frame >= state.startupScene.totalFrames) {
+    state.startupScene = null;
+  }
+}
+
+function getSensorHit(origin, creature, eyeAngle, candidates, radiusOffset = 0) {
+  const halfFov = CONFIG.eyeFov * 0.5;
+  let best = null;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const target = candidates[i];
+    if (target === creature) {
+      continue;
+    }
+
+    if ("alive" in target && !target.alive) {
+      continue;
+    }
+
+    const dx = target.x - origin.x;
+    const dy = target.y - origin.y;
+    const centerDistance = Math.hypot(dx, dy);
+    const distance = Math.max(0, centerDistance - radiusOffset - (target.radius || 0));
+
+    if (distance > CONFIG.eyeRange) {
+      continue;
+    }
+
+    const angle = normalizeAngle(Math.atan2(dy, dx) - eyeAngle);
+    if (Math.abs(angle) > halfFov) {
+      continue;
+    }
+
+    if (!best || distance < best.distance) {
+      best = {
+        point: { x: target.x, y: target.y },
+        distance,
+        angle
+      };
+    }
+  }
+
+  if (!best) {
+    return {
+      closeness: 0,
+      angleNorm: 0,
+      point: null,
+      distance: CONFIG.eyeRange
+    };
+  }
+
+  return {
+    closeness: 1 - clamp(best.distance / CONFIG.eyeRange, 0, 1),
+    angleNorm: clamp(best.angle / halfFov, -1, 1),
+    point: best.point,
+    distance: best.distance
+  };
+}
+
+function senseCreature(creature) {
+  const eyeOffsets = [-CONFIG.eyeOffset, CONFIG.eyeOffset];
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  const eyeOrigins = [bodyMetrics.leftEyeLocal, bodyMetrics.rightEyeLocal];
+  const eyes = [];
+  const inputs = [];
+
+  for (let eyeIndex = 0; eyeIndex < eyeOffsets.length; eyeIndex += 1) {
+    const angle = creature.heading + eyeOffsets[eyeIndex];
+    const origin = bodyLocalToWorld(
+      creature,
+      bodyMetrics,
+      eyeOrigins[eyeIndex].x,
+      eyeOrigins[eyeIndex].y
+    );
+    const foodSense = getSensorHit(origin, creature, angle, state.foods, 0);
+    const creatureSense = getSensorHit(origin, creature, angle, state.creatures, 0);
+    const wallSense = getSensorHit(origin, creature, angle, wallSensorPoints, 0);
+
+    eyes.push({
+      origin,
+      angle,
+      food: foodSense,
+      creature: creatureSense,
+      wall: wallSense
+    });
+
+    inputs.push(
+      foodSense.closeness,
+      foodSense.angleNorm,
+      creatureSense.closeness,
+      creatureSense.angleNorm,
+      wallSense.closeness,
+      wallSense.angleNorm
+    );
+  }
+
+  for (let memoryIndex = 0; memoryIndex < creature.memoryState.length; memoryIndex += 1) {
+    inputs.push(creature.memoryState[memoryIndex] || 0);
+  }
+
+  return { eyes, inputs };
+}
+
+function applyBrain(creature) {
+  const sensing = senseCreature(creature);
+  const brainState = forwardBrain(creature.brain, sensing.inputs);
+
+  creature.senses = sensing;
+  creature.hiddenLayers = brainState.hiddenLayers;
+  creature.outputs = brainState.outputs;
+
+  const forward = creature.outputs[0];
+  const backward = creature.outputs[1];
+  const left = creature.outputs[2];
+  const right = creature.outputs[3];
+
+  creature.forwardDrive = forward - backward;
+  creature.sideDrive = right - left;
+  for (let memoryIndex = 0; memoryIndex < creature.memoryState.length; memoryIndex += 1) {
+    const rawWrite = creature.outputs[MOVEMENT_OUTPUT_COUNT + memoryIndex] || 0;
+    const targetMemory = rawWrite * 2 - 1;
+    creature.memoryWrite[memoryIndex] = targetMemory;
+    creature.memoryState[memoryIndex] = damp(
+      creature.memoryState[memoryIndex],
+      targetMemory,
+      CONFIG.memoryWriteBlend
+    );
+  }
+
+  const actions = [
+    { label: MOVEMENT_OUTPUT_LABELS[0], value: forward },
+    { label: MOVEMENT_OUTPUT_LABELS[1], value: backward },
+    { label: MOVEMENT_OUTPUT_LABELS[2], value: left },
+    { label: MOVEMENT_OUTPUT_LABELS[3], value: right }
+  ];
+  actions.sort((a, b) => b.value - a.value);
+  creature.recentAction = actions[0].label;
+}
+
+function updateCreature(creature) {
+  if (!creature.alive) {
+    updateDyingCreature(creature);
+    return;
+  }
+
+  creature.age += 1;
+
+  if (creature.lifeStage === "egg") {
+    updateEgg(creature);
+    return;
+  }
+
+  if (creature.lifeStage === "juvenile") {
+    creature.growthTimer = Math.max(0, creature.growthTimer - 1);
+    if (creature.growthTimer === 0) {
+      creature.lifeStage = "adult";
+      creature.recentAction = "ADULT";
+      spawnSpark(creature.x, creature.y, "#fff17b", 8);
+    }
+  }
+
+  creature.energy -= creature.lifeStage === "juvenile" ? CONFIG.metabolism * 0.72 : CONFIG.metabolism;
+
+  applyBrain(creature);
+  creature.displayForwardDrive = damp(
+    creature.displayForwardDrive,
+    creature.forwardDrive,
+    CONFIG.segmentSignalSmoothing
+  );
+  creature.displaySideDrive = damp(
+    creature.displaySideDrive,
+    creature.sideDrive,
+    CONFIG.segmentSignalSmoothing
+  );
+  creature.turnVelocity += creature.sideDrive * CONFIG.turnRate;
+  creature.turnVelocity *= CONFIG.turnDrag;
+  creature.turnVelocity = clamp(creature.turnVelocity, -CONFIG.maxTurnSpeed, CONFIG.maxTurnSpeed);
+  creature.displayTurnVelocity = damp(
+    creature.displayTurnVelocity,
+    creature.turnVelocity,
+    CONFIG.segmentSignalSmoothing
+  );
+
+  creature.heading += creature.turnVelocity;
+  const headingX = Math.cos(creature.heading);
+  const headingY = Math.sin(creature.heading);
+
+  creature.vx += headingX * creature.forwardDrive * CONFIG.thrust;
+  creature.vy += headingY * creature.forwardDrive * CONFIG.thrust;
+
+  creature.vx *= CONFIG.friction;
+  creature.vy *= CONFIG.friction;
+
+  const speed = Math.hypot(creature.vx, creature.vy);
+  if (speed > CONFIG.maxSpeed) {
+    const scale = CONFIG.maxSpeed / speed;
+    creature.vx *= scale;
+    creature.vy *= scale;
+  }
+
+  creature.x += creature.vx;
+  creature.y += creature.vy;
+  creature.movePhase += 0.25 + Math.abs(creature.forwardDrive) * 0.3 + Math.abs(creature.sideDrive) * 0.2;
+  relaxCreatureSegments(creature, 2);
+
+  const activity =
+    creature.outputs[0] +
+    creature.outputs[1] +
+    creature.outputs[2] +
+    creature.outputs[3];
+
+  creature.energy -= activity * CONFIG.motionCost;
+
+  handleWallBounce(creature);
+  attemptEat(creature);
+  attemptReproduce(creature);
+
+  if (creature.energy <= 0) {
+    killCreature(creature);
+  }
+}
+
+function handleWallBounce(creature) {
+  resolveCreatureWallCollisions(creature);
+}
+
+function attemptEat(creature) {
+  const headingX = Math.cos(creature.heading);
+  const headingY = Math.sin(creature.heading);
+  const forwardVelocity = creature.vx * headingX + creature.vy * headingY;
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  const growthScale = bodyMetrics.lifeScale;
+
+  if (
+    creature.forwardDrive <= CONFIG.minEatingForwardDrive ||
+    forwardVelocity <= CONFIG.minEatingForwardVelocity
+  ) {
+    return;
+  }
+
+  const mouthPoint = bodyLocalToWorld(
+    creature,
+    bodyMetrics,
+    bodyMetrics.mouthLocal.x,
+    bodyMetrics.mouthLocal.y
+  );
+  const mouthX = mouthPoint.x;
+  const mouthY = mouthPoint.y;
+  const halfMouthArc = CONFIG.mouthArc * 0.5;
+
+  for (let i = state.foods.length - 1; i >= 0; i -= 1) {
+    const food = state.foods[i];
+    const dx = food.x - mouthX;
+    const dy = food.y - mouthY;
+    const angleToFood = normalizeAngle(Math.atan2(dy, dx) - creature.heading);
+    if (Math.abs(angleToFood) > halfMouthArc) {
+      continue;
+    }
+
+    const mouthDistance = Math.hypot(food.x - mouthX, food.y - mouthY);
+    if (mouthDistance < CONFIG.mouthReach * growthScale + food.radius) {
+      creature.energy = clamp(creature.energy + food.energy, 0, CONFIG.maxEnergy);
+      state.foods.splice(i, 1);
+      spawnSpark(food.x, food.y, "#80ff88", 6);
+      playEatSound(food.x);
+    }
+  }
+}
+
+function attemptReproduce(creature) {
+  if (getLivingCreaturesCount() >= CONFIG.maxCreatures) {
+    return;
+  }
+
+  if (creature.lifeStage !== "adult") {
+    return;
+  }
+
+  if (creature.age < CONFIG.maturityAge || creature.energy < CONFIG.reproduceThreshold) {
+    return;
+  }
+
+  if (Math.random() > CONFIG.reproduceChance) {
+    return;
+  }
+
+  creature.energy -= CONFIG.reproduceCost;
+  if (creature.energy <= 0) {
+    killCreature(creature);
+    return;
+  }
+
+  const child = createCreature(creature, { lifeStage: "egg" });
+  child.heading = creature.heading + rand(-0.35, 0.35);
+  child.vx = creature.vx * 0.55 + rand(-0.4, 0.4);
+  child.vy = creature.vy * 0.55 + rand(-0.4, 0.4);
+  state.creatures.push(child);
+  state.births += 1;
+  creature.children += 1;
+  spawnSpark(child.x, child.y, "#fff17b", 8);
+  playBirthSound(child.x);
+}
+
+function recordArchive(creature, includeForExtinction = true) {
+  if (creature.age > state.bestEverAge) {
+    state.bestEverAge = creature.age;
+    state.archiveBrain = cloneBrain(creature.brain);
+    state.archiveHue = creature.hue;
+    state.archiveSegmentGene = creature.segmentGene;
+  }
+
+  if (includeForExtinction && creature.age > state.extinctionCandidateAge) {
+    state.extinctionCandidateAge = creature.age;
+    state.extinctionCandidateBrain = cloneBrain(creature.brain);
+    state.extinctionCandidateHue = creature.hue;
+    state.extinctionCandidateGeneration = creature.generation;
+    state.extinctionCandidateSegmentGene = creature.segmentGene;
+  }
+}
+
+function resolveCreatureCollisions() {
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    for (let j = i + 1; j < state.creatures.length; j += 1) {
+      const a = state.creatures[i];
+      const b = state.creatures[j];
+      if (!a.alive || !b.alive) {
+        continue;
+      }
+
+      const aBodies = buildCreatureCollisionBodies(a, getCreatureBodyMetrics(a));
+      const bBodies = buildCreatureCollisionBodies(b, getCreatureBodyMetrics(b));
+      let collided = false;
+      let sparkX = (a.x + b.x) * 0.5;
+      let sparkY = (a.y + b.y) * 0.5;
+
+      for (let bodyAIndex = 0; bodyAIndex < aBodies.length; bodyAIndex += 1) {
+        const bodyA = aBodies[bodyAIndex];
+        for (let bodyBIndex = 0; bodyBIndex < bBodies.length; bodyBIndex += 1) {
+          const bodyB = bBodies[bodyBIndex];
+          const dx = bodyB.x - bodyA.x;
+          const dy = bodyB.y - bodyA.y;
+          let distance = Math.hypot(dx, dy);
+          const minDistance = bodyA.radius + bodyB.radius;
+
+          if (distance === 0) {
+            distance = 0.0001;
+          }
+
+          if (distance >= minDistance) {
+            continue;
+          }
+
+          const overlap = minDistance - distance;
+          const nx = dx / distance;
+          const ny = dy / distance;
+
+          applyCollisionDisplacement(bodyA, -nx * overlap * 0.5, -ny * overlap * 0.5);
+          applyCollisionDisplacement(bodyB, nx * overlap * 0.5, ny * overlap * 0.5);
+
+          sparkX = (bodyA.x + bodyB.x) * 0.5;
+          sparkY = (bodyA.y + bodyB.y) * 0.5;
+          collided = true;
+        }
+      }
+
+      if (!collided) {
+        continue;
+      }
+
+      a.energy -= CONFIG.collisionCost;
+      b.energy -= CONFIG.collisionCost;
+      relaxCreatureSegments(a, 2);
+      relaxCreatureSegments(b, 2);
+      resolveCreatureWallCollisions(a);
+      resolveCreatureWallCollisions(b);
+      playCollisionSound(sparkX, clamp((a.energy + b.energy) / (CONFIG.maxEnergy * 2), 0.15, 1));
+
+      if (Math.random() < 0.24) {
+        spawnSpark(sparkX, sparkY, "#ffb447", 4);
+      }
+    }
+  }
+}
+
+function spawnSpark(x, y, color, count) {
+  for (let i = 0; i < count; i += 1) {
+    if (state.sparks.length >= CONFIG.maxSparks) {
+      state.sparks.shift();
+    }
+    state.sparks.push({
+      x,
+      y,
+      vx: rand(-1.8, 1.8),
+      vy: rand(-1.8, 1.8),
+      life: rand(8, 18),
+      maxLife: rand(8, 18),
+      color
+    });
+  }
+}
+
+function updateSparks() {
+  for (let i = state.sparks.length - 1; i >= 0; i -= 1) {
+    const spark = state.sparks[i];
+    spark.x += spark.vx;
+    spark.y += spark.vy;
+    spark.vx *= 0.93;
+    spark.vy *= 0.93;
+    spark.life -= 1;
+    if (spark.life <= 0) {
+      state.sparks.splice(i, 1);
+    }
+  }
+}
+
+function maintainFood() {
+  if (state.foods.length < CONFIG.maxFood && Math.random() < CONFIG.foodSpawnChance) {
+    state.foods.push(createFood());
+  }
+}
+
+function updateFood() {
+  for (let i = state.foods.length - 1; i >= 0; i -= 1) {
+    const food = state.foods[i];
+    food.age += 1;
+    if (food.age >= CONFIG.foodLifetimeFrames) {
+      state.foods.splice(i, 1);
+    }
+  }
+}
+
+function cullDeadCreatures() {
+  for (let i = state.creatures.length - 1; i >= 0; i -= 1) {
+    if (!state.creatures[i].alive && state.creatures[i].deathTimer <= 0) {
+      state.creatures.splice(i, 1);
+    }
+  }
+}
+
+function chooseFeaturedCreature() {
+  let oldest = null;
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    if (!state.creatures[i].alive) {
+      continue;
+    }
+    if (!oldest || state.creatures[i].age > oldest.age) {
+      oldest = state.creatures[i];
+    }
+  }
+  state.featured = oldest;
+}
+
+function reseedIfNeeded() {
+  if (getLivingCreaturesCount() > 0) {
+    state.extinctionFrames = 0;
+    state.extinctionLogged = false;
+    return;
+  }
+
+  if (!state.extinctionLogged) {
+    state.extinctionCount += 1;
+    state.extinctionLogged = true;
+  }
+
+  if (!state.extinctionScene) {
+    if (state.extinctionSpecimen) {
+      state.extinctionCandidateAge = state.extinctionSpecimen.age;
+      state.extinctionCandidateBrain = cloneBrain(state.extinctionSpecimen.brain);
+      state.extinctionCandidateHue = state.extinctionSpecimen.hue;
+      state.extinctionCandidateGeneration = state.extinctionSpecimen.generation;
+      state.extinctionCandidateSegmentGene = state.extinctionSpecimen.segmentGene;
+    }
+    state.extinctionScene = buildExtinctionScene();
+    state.creatures.length = 0;
+    state.sparks.length = 0;
+  }
+
+  state.extinctionFrames += 1;
+  state.extinctionScene.frame = Math.min(
+    state.extinctionFrames,
+    state.extinctionScene.totalFrames
+  );
+  if (state.extinctionFrames < state.extinctionScene.totalFrames) {
+    return;
+  }
+
+  if (state.extinctionScene.sourceBrain) {
+    state.recentExtinctionBrain = cloneBrain(state.extinctionScene.sourceBrain);
+    state.recentExtinctionHue = state.extinctionCandidateHue;
+    state.recentExtinctionGeneration = state.extinctionCandidateGeneration;
+    state.recentExtinctionSegmentGene = state.extinctionCandidateSegmentGene;
+  }
+
+  const targetFood = Math.min(CONFIG.initialFood, CONFIG.maxFood);
+  while (state.foods.length < targetFood) {
+    state.foods.push(createFood());
+  }
+
+  for (let i = 0; i < state.extinctionScene.plans.length; i += 1) {
+    const plan = state.extinctionScene.plans[i];
+    state.creatures.push(
+      createCreature(null, {
+        lifeStage: "egg",
+        brainOverride: plan.brain,
+        hueOverride: plan.hue,
+        segmentGeneOverride: plan.segmentGene,
+        generationOverride: plan.generation,
+        positionOverride: plan.position,
+        headingOverride: plan.heading,
+        velocityOverride: { vx: rand(-0.08, 0.08), vy: rand(-0.08, 0.08) },
+        energyOverride: CONFIG.startingEnergy * 0.82
+      })
+    );
+  }
+
+  playExtinctionPhaseTone("release");
+  state.extinctionFrames = 0;
+  state.lineageTick = 0;
+  state.extinctionCandidateBrain = null;
+  state.extinctionCandidateHue = 42;
+  state.extinctionCandidateAge = 0;
+  state.extinctionCandidateGeneration = 1;
+  state.extinctionCandidateSegmentGene = 5;
+  state.extinctionSpecimen = null;
+  state.extinctionScene = null;
+}
+
+function updateSimulation() {
+  state.tick += 1;
+  if (state.extinctionScene) {
+    reseedIfNeeded();
+    chooseFeaturedCreature();
+    pushTelemetrySample();
+    return;
+  }
+  if (getLivingCreaturesCount() > 0) {
+    state.lineageTick += 1;
+  }
+  maintainFood();
+  updateFood();
+
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    updateCreature(state.creatures[i]);
+  }
+
+  resolveCreatureCollisions();
+  updateSparks();
+  cullDeadCreatures();
+  reseedIfNeeded();
+  chooseFeaturedCreature();
+  pushTelemetrySample();
+}
+
+function hexToRgba(hex, alpha) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getBrainLayerCounts() {
+  return [INPUT_LABELS.length, ...CONFIG.hiddenLayerSizes, OUTPUT_LABELS.length];
+}
+
+const brainBlueprintLayoutCache = new Map();
+
+function getBrainBlueprintLayout(x, y, width, height) {
+  const layerCounts = getBrainLayerCounts();
+  const key = `${layerCounts.join(",")}|${x}|${y}|${width}|${height}`;
+  const cached = brainBlueprintLayoutCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const layerXs = layerCounts.map((_, index) =>
+    x + 8 + ((width - 16) * index) / Math.max(1, layerCounts.length - 1)
+  );
+  const layers = layerCounts.map((count, layerIndex) =>
+    buildLayerNodes(layerXs[layerIndex], y + 6, y + height - 6, count)
+  );
+  const flatNodes = [];
+
+  for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+    for (let nodeIndex = 0; nodeIndex < layers[layerIndex].length; nodeIndex += 1) {
+      flatNodes.push({ layerIndex, nodeIndex });
+    }
+  }
+
+  const layout = { layers, flatNodes };
+  brainBlueprintLayoutCache.set(key, layout);
+  if (brainBlueprintLayoutCache.size > 40) {
+    brainBlueprintLayoutCache.clear();
+    brainBlueprintLayoutCache.set(key, layout);
+  }
+  return layout;
+}
+
+function buildBrainBlueprintNodes(x, y, width, height) {
+  return getBrainBlueprintLayout(x, y, width, height).layers;
+}
+
+function getBrainBlueprintConnectionRefs(brain) {
+  if (!brain) {
+    return [];
+  }
+  if (brain._blueprintConnectionRefs) {
+    return brain._blueprintConnectionRefs;
+  }
+
+  const refs = [];
+  for (let layerIndex = 0; layerIndex < brain.weights.length; layerIndex += 1) {
+    for (let rowIndex = 0; rowIndex < brain.weights[layerIndex].length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < brain.weights[layerIndex][rowIndex].length; colIndex += 1) {
+        refs.push({ layerIndex, rowIndex, colIndex });
+      }
+    }
+  }
+  brain._blueprintConnectionRefs = refs;
+  return refs;
+}
+
+function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
+  if (!brain) {
+    return;
+  }
+
+  const alpha = options.alpha ?? 1;
+  const baseBrain = options.baseBrain || null;
+  const mix = options.mix ?? 1;
+  const mutationSummary = options.mutationSummary || null;
+  const mutationGlow = options.mutationGlow ?? 0;
+  const fluxAmount = options.fluxAmount ?? 0;
+  const fluxPhase = options.fluxPhase ?? 0;
+  const fluxPacketBudget = options.fluxPacketBudget ?? 0;
+  const nodePulseBudget = options.nodePulseBudget ?? 0;
+  const fluxSpeedScale = options.fluxSpeedScale ?? 1;
+  const fluxSelectorSpeed = options.fluxSelectorSpeed ?? 0.55;
+  const nodePulseSpeed = options.nodePulseSpeed ?? 0.2;
+  const nodePulseSelectorSpeed = options.nodePulseSelectorSpeed ?? 0.42;
+  const time = options.time ?? state.tick;
+  const blueprintLayout = getBrainBlueprintLayout(x, y, width, height);
+  const nodeLayers = blueprintLayout.layers;
+
+  ctx.save();
+  ctx.shadowBlur = 0;
+
+  for (let layerIndex = 0; layerIndex < brain.weights.length; layerIndex += 1) {
+    for (let rowIndex = 0; rowIndex < brain.weights[layerIndex].length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < brain.weights[layerIndex][rowIndex].length; colIndex += 1) {
+        const targetWeight = brain.weights[layerIndex][rowIndex][colIndex];
+        const baseWeight = baseBrain
+          ? baseBrain.weights[layerIndex][rowIndex][colIndex]
+          : targetWeight;
+        const weight = lerp(baseWeight, targetWeight, mix);
+        const strength = clamp(Math.abs(weight) * 0.24 + 0.02, 0.02, 0.42) * alpha;
+        ctx.strokeStyle = weight >= 0
+          ? `rgba(74, 255, 212, ${strength})`
+          : `rgba(255, 109, 179, ${strength})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(nodeLayers[layerIndex][colIndex].x, nodeLayers[layerIndex][colIndex].y);
+        ctx.lineTo(nodeLayers[layerIndex + 1][rowIndex].x, nodeLayers[layerIndex + 1][rowIndex].y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  if (fluxAmount > 0.01 && fluxPacketBudget > 0) {
+    const fluxRate = (0.012 + fluxAmount * 0.02) * fluxSpeedScale;
+    const flatConnections = getBrainBlueprintConnectionRefs(brain);
+    const selectorStep = Math.max(1, Math.round(0.45 / Math.max(0.01, fluxSelectorSpeed)));
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.shadowBlur = 0;
+
+    for (let packetIndex = 0; packetIndex < fluxPacketBudget; packetIndex += 1) {
+      const packetCycle = time * fluxRate + fluxPhase + packetIndex * 0.19;
+      const selectorCycle = Math.floor(packetCycle + fluxPhase * 3 + packetIndex * 0.61);
+      const selector =
+        (Math.floor(selectorCycle / selectorStep) + Math.floor(fluxPhase * 29) + packetIndex * 11) %
+        Math.max(1, flatConnections.length);
+      const connection = flatConnections[selector];
+      if (!connection) {
+        continue;
+      }
+
+      const weight =
+        brain.weights[connection.layerIndex][connection.rowIndex][connection.colIndex];
+      const positive = weight >= 0;
+      const packetT = packetCycle % 1;
+      const fromNode = nodeLayers[connection.layerIndex][connection.colIndex];
+      const toNode = nodeLayers[connection.layerIndex + 1][connection.rowIndex];
+      const packetX = lerp(fromNode.x, toNode.x, packetT);
+      const packetY = lerp(fromNode.y, toNode.y, packetT);
+      const trailT = Math.max(0, packetT - 0.08);
+      const trailX = lerp(fromNode.x, toNode.x, trailT);
+      const trailY = lerp(fromNode.y, toNode.y, trailT);
+      const packetRadius = packetIndex % 3 === 0 ? 1.7 : 1.25;
+      const packetAlpha = (0.18 + Math.abs(weight) * 0.14 + fluxAmount * 0.24) * alpha;
+
+      ctx.fillStyle = positive
+        ? `rgba(74, 255, 212, ${packetAlpha * 0.42})`
+        : `rgba(255, 109, 179, ${packetAlpha * 0.42})`;
+      ctx.beginPath();
+      ctx.arc(trailX, trailY, packetRadius * 0.72, 0, TAU);
+      ctx.fill();
+
+      ctx.fillStyle = positive
+        ? `rgba(74, 255, 212, ${packetAlpha})`
+        : `rgba(255, 109, 179, ${packetAlpha})`;
+      ctx.beginPath();
+      ctx.arc(packetX, packetY, packetRadius, 0, TAU);
+      ctx.fill();
+      if (packetIndex % 2 === 0) {
+        ctx.fillStyle = `rgba(255, 241, 123, ${packetAlpha * 0.55})`;
+        ctx.beginPath();
+        ctx.arc(packetX, packetY, packetRadius * 0.4, 0, TAU);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  if (mutationSummary && mutationGlow > 0.01) {
+    const mutationPulse = 0.68 + Math.sin(time * 0.22 + x * 0.03 + y * 0.02) * 0.22;
+    const maxMutation = Math.max(0.001, mutationSummary.maxDelta);
+
+    for (let i = 0; i < mutationSummary.weightHighlights.length; i += 1) {
+      const highlight = mutationSummary.weightHighlights[i];
+      const fromNode = nodeLayers[highlight.layerIndex][highlight.colIndex];
+      const toNode = nodeLayers[highlight.layerIndex + 1][highlight.rowIndex];
+      const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
+      const signal = normalized * mutationGlow * mutationPulse;
+      const positive = highlight.delta >= 0;
+
+      ctx.shadowBlur = 4 + signal * 8;
+      ctx.shadowColor = positive
+        ? `rgba(74, 255, 212, ${0.24 + signal * 0.44})`
+        : `rgba(255, 109, 179, ${0.24 + signal * 0.44})`;
+      ctx.strokeStyle = `rgba(255, 241, 123, ${0.16 + signal * 0.34})`;
+      ctx.lineWidth = 1.2 + normalized * 1.8 + signal * 1.1;
+      ctx.beginPath();
+      ctx.moveTo(fromNode.x, fromNode.y);
+      ctx.lineTo(toNode.x, toNode.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = positive
+        ? `rgba(74, 255, 212, ${0.32 + signal * 0.52})`
+        : `rgba(255, 109, 179, ${0.32 + signal * 0.52})`;
+      ctx.lineWidth = 0.9 + normalized * 1.1 + signal * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(fromNode.x, fromNode.y);
+      ctx.lineTo(toNode.x, toNode.y);
+      ctx.stroke();
+    }
+  }
+
+  for (let layerIndex = 0; layerIndex < nodeLayers.length; layerIndex += 1) {
+    for (let nodeIndex = 0; nodeIndex < nodeLayers[layerIndex].length; nodeIndex += 1) {
+      const node = nodeLayers[layerIndex][nodeIndex];
+      ctx.fillStyle = `rgba(3, 11, 17, ${0.8 * alpha})`;
+      ctx.fillRect(node.x - 2, node.y - 2, 4, 4);
+      ctx.fillStyle = `rgba(157, 231, 255, ${0.78 * alpha})`;
+      ctx.fillRect(node.x - 1, node.y - 1, 2, 2);
+    }
+  }
+
+  if (fluxAmount > 0.01 && nodePulseBudget > 0) {
+    const flatNodes = blueprintLayout.flatNodes;
+    const selectorStep = Math.max(1, Math.round(0.45 / Math.max(0.01, nodePulseSelectorSpeed)));
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.shadowBlur = 0;
+
+    for (let pulseIndex = 0; pulseIndex < nodePulseBudget; pulseIndex += 1) {
+      const selectorCycle = time * nodePulseSelectorSpeed + fluxPhase * 2.6 + pulseIndex * 0.73;
+      const selector =
+        (Math.floor(selectorCycle / selectorStep) + Math.floor(fluxPhase * 23) + pulseIndex * 7) %
+        Math.max(1, flatNodes.length);
+      const nodeRef = flatNodes[selector];
+      if (!nodeRef) {
+        continue;
+      }
+
+      const node = nodeLayers[nodeRef.layerIndex][nodeRef.nodeIndex];
+      const fadeT = (selectorCycle / selectorStep) % 1;
+      const fade = Math.sin(fadeT * Math.PI) ** 2;
+      const shimmer =
+        0.5 + Math.sin(time * nodePulseSpeed + fluxPhase * 6 + pulseIndex * 0.8 + selector * 0.09) * 0.5;
+      const pulseAlpha = (0.08 + shimmer * 0.14 + fluxAmount * 0.1) * fade * alpha;
+      ctx.fillStyle = pulseIndex % 2 === 0
+        ? `rgba(255, 241, 123, ${pulseAlpha * 0.5})`
+        : `rgba(157, 231, 255, ${pulseAlpha * 0.46})`;
+      ctx.fillRect(node.x - 3, node.y - 3, 6, 6);
+      ctx.fillStyle = pulseIndex % 2 === 0
+        ? `rgba(255, 241, 123, ${pulseAlpha})`
+        : `rgba(157, 231, 255, ${pulseAlpha * 0.92})`;
+      ctx.fillRect(node.x - 2, node.y - 2, 4, 4);
+    }
+    ctx.restore();
+  }
+
+  if (mutationSummary && mutationGlow > 0.01) {
+    const nodePulse = 0.7 + Math.sin(time * 0.28 + x * 0.02 + y * 0.02) * 0.2;
+    const maxMutation = Math.max(0.001, mutationSummary.maxDelta);
+
+    for (let i = 0; i < mutationSummary.biasHighlights.length; i += 1) {
+      const highlight = mutationSummary.biasHighlights[i];
+      const node = nodeLayers[highlight.layerIndex + 1]?.[highlight.nodeIndex];
+      if (!node) {
+        continue;
+      }
+
+      const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
+      const signal = normalized * mutationGlow * nodePulse;
+      const positive = highlight.delta >= 0;
+
+      ctx.shadowBlur = 4 + signal * 8;
+      ctx.shadowColor = positive
+        ? `rgba(74, 255, 212, ${0.22 + signal * 0.42})`
+        : `rgba(255, 109, 179, ${0.22 + signal * 0.42})`;
+      ctx.fillStyle = `rgba(255, 241, 123, ${0.15 + signal * 0.28})`;
+      ctx.fillRect(node.x - 4, node.y - 4, 8, 8);
+      ctx.strokeStyle = positive
+        ? `rgba(74, 255, 212, ${0.35 + signal * 0.48})`
+        : `rgba(255, 109, 179, ${0.35 + signal * 0.48})`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(node.x - 3.5, node.y - 3.5, 7, 7);
+      ctx.fillStyle = `rgba(223, 252, 255, ${0.42 + signal * 0.36})`;
+      ctx.fillRect(node.x - 1, node.y - 1, 2, 2);
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawMutationTelemetry(ctx, summary, x, bottomY, intensity) {
+  if (!summary || intensity <= 0.02) {
+    return;
+  }
+
+  const boxWidth = 76;
+  const boxHeight = 20;
+  const boxX = x - boxWidth * 0.5;
+  const boxY = bottomY - boxHeight;
+  const alpha = clamp(0.22 + intensity * 0.72, 0.22, 0.94);
+
+  ctx.save();
+  ctx.fillStyle = `rgba(5, 15, 24, ${0.76 * alpha})`;
+  ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.strokeStyle = `rgba(255, 241, 123, ${0.18 + intensity * 0.46})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.46 + intensity * 0.36})`;
+  ctx.fillRect(boxX + 2, boxY + 2, boxWidth - 4, 1);
+  ctx.textAlign = "center";
+  ctx.font = "7px Courier New";
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.7 + intensity * 0.22})`;
+  ctx.fillText(`DW ${summary.changedWeights}  DB ${summary.changedBiases}`, x, boxY + 8);
+  ctx.fillStyle = `rgba(255, 164, 208, ${0.62 + intensity * 0.28})`;
+  ctx.fillText(`MAX ${summary.maxDelta.toFixed(2)}`, x, boxY + 16);
+  ctx.restore();
+}
+
+function formatBrainNodeRef(layerIndex, nodeIndex) {
+  return `L${layerIndex + 1}N${String(nodeIndex + 1).padStart(2, "0")}`;
+}
+
+function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
+  if (!summary || intensity <= 0.02) {
+    return;
+  }
+
+  const lines = [];
+  const weightHighlights = summary.weightHighlights.slice(0, 4);
+  const biasHighlights = summary.biasHighlights.slice(0, 3);
+
+  for (let i = 0; i < weightHighlights.length; i += 1) {
+    const highlight = weightHighlights[i];
+    lines.push({
+      color: highlight.delta >= 0 ? "74, 255, 212" : "255, 109, 179",
+      text: `${String(i + 1).padStart(2, "0")} ${formatBrainNodeRef(highlight.layerIndex, highlight.colIndex)}>${formatBrainNodeRef(highlight.layerIndex + 1, highlight.rowIndex)} ${highlight.delta >= 0 ? "+" : ""}${highlight.delta.toFixed(2)}`
+    });
+  }
+
+  for (let i = 0; i < biasHighlights.length; i += 1) {
+    const highlight = biasHighlights[i];
+    lines.push({
+      color: highlight.delta >= 0 ? "74, 255, 212" : "255, 109, 179",
+      text: `B${i + 1} ${formatBrainNodeRef(highlight.layerIndex + 1, highlight.nodeIndex)} BIAS ${highlight.delta >= 0 ? "+" : ""}${highlight.delta.toFixed(2)}`
+    });
+  }
+
+  const lineHeight = 7;
+  const boxHeight = 11 + lines.length * lineHeight;
+  const boxX = centerX - width * 0.5;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(5, 15, 24, ${0.78 + intensity * 0.08})`;
+  ctx.fillRect(boxX, topY, width, boxHeight);
+  ctx.strokeStyle = `rgba(255, 241, 123, ${0.16 + intensity * 0.34})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX, topY, width, boxHeight);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.54 + intensity * 0.22})`;
+  ctx.fillRect(boxX + 2, topY + 2, width - 4, 1);
+
+  ctx.font = "6px Courier New";
+  ctx.textAlign = "left";
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.72 + intensity * 0.18})`;
+  ctx.fillText("STITCH MAP // PASSED NEURONS + LIVE MUTATIONS", boxX + 6, topY + 8);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const lineY = topY + 15 + i * lineHeight;
+    ctx.fillStyle = `rgba(${line.color}, ${0.24 + intensity * 0.42})`;
+    ctx.fillRect(boxX + 6, lineY - 4, 4, 4);
+    ctx.fillStyle = `rgba(221, 250, 255, ${0.64 + intensity * 0.18})`;
+    ctx.fillText(line.text, boxX + 14, lineY);
+  }
+
+  ctx.restore();
+}
+
+function drawBrainStitching(
+  ctx,
+  summary,
+  sourceX,
+  sourceY,
+  sourceW,
+  sourceH,
+  targetX,
+  targetY,
+  targetW,
+  targetH,
+  intensity,
+  time
+) {
+  if (!summary || intensity <= 0.02) {
+    return;
+  }
+
+  const sourceLayers = getBrainBlueprintLayout(sourceX, sourceY, sourceW, sourceH).layers;
+  const targetLayers = getBrainBlueprintLayout(targetX, targetY, targetW, targetH).layers;
+  const stitchHighlights = summary.weightHighlights.slice(0, 6);
+  const biasHighlights = summary.biasHighlights.slice(0, 3);
+  const maxMutation = Math.max(0.001, summary.maxDelta);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineWidth = 1;
+  ctx.font = "6px Courier New";
+  ctx.textAlign = "center";
+
+  for (let i = 0; i < stitchHighlights.length; i += 1) {
+    const highlight = stitchHighlights[i];
+    const sourceFrom = sourceLayers[highlight.layerIndex][highlight.colIndex];
+    const sourceTo = sourceLayers[highlight.layerIndex + 1][highlight.rowIndex];
+    const targetFrom = targetLayers[highlight.layerIndex][highlight.colIndex];
+    const targetTo = targetLayers[highlight.layerIndex + 1][highlight.rowIndex];
+    const sourceMid = {
+      x: lerp(sourceFrom.x, sourceTo.x, 0.5),
+      y: lerp(sourceFrom.y, sourceTo.y, 0.5)
+    };
+    const targetMid = {
+      x: lerp(targetFrom.x, targetTo.x, 0.5),
+      y: lerp(targetFrom.y, targetTo.y, 0.5)
+    };
+    const positive = highlight.delta >= 0;
+    const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
+    const threadAlpha = 0.12 + intensity * 0.26 + normalized * 0.14;
+    const warp = Math.sin(time * 0.08 + i * 0.75) * (8 + intensity * 12);
+    const controlX = lerp(sourceMid.x, targetMid.x, 0.5);
+    const controlY = lerp(sourceMid.y, targetMid.y, 0.5) + warp;
+    const stitchT = (time * 0.009 + i * 0.13) % 1;
+    const echoT = (stitchT + 0.76) % 1;
+    const packetX =
+      (1 - stitchT) * (1 - stitchT) * sourceMid.x +
+      2 * (1 - stitchT) * stitchT * controlX +
+      stitchT * stitchT * targetMid.x;
+    const packetY =
+      (1 - stitchT) * (1 - stitchT) * sourceMid.y +
+      2 * (1 - stitchT) * stitchT * controlY +
+      stitchT * stitchT * targetMid.y;
+    const echoPacketX =
+      (1 - echoT) * (1 - echoT) * sourceMid.x +
+      2 * (1 - echoT) * echoT * controlX +
+      echoT * echoT * targetMid.x;
+    const echoPacketY =
+      (1 - echoT) * (1 - echoT) * sourceMid.y +
+      2 * (1 - echoT) * echoT * controlY +
+      echoT * echoT * targetMid.y;
+    const orbitAngle = time * 0.15 + i * 1.2;
+    const orbitRadius = 5 + normalized * 4 + intensity * 2;
+    const orbitX = targetMid.x + Math.cos(orbitAngle) * orbitRadius;
+    const orbitY = targetMid.y + Math.sin(orbitAngle) * orbitRadius * 0.7;
+    const glyphX = Math.round(targetMid.x + 7 + normalized * 2);
+    const glyphY = Math.round(targetMid.y - 6);
+    const tag = String(i + 1).padStart(2, "0");
+
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.06 + intensity * 0.14})`;
+    ctx.beginPath();
+    ctx.moveTo(sourceFrom.x, sourceFrom.y);
+    ctx.lineTo(targetFrom.x, targetFrom.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sourceTo.x, sourceTo.y);
+    ctx.lineTo(targetTo.x, targetTo.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.08 + intensity * 0.16})`;
+    ctx.lineWidth = 1 + normalized * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(sourceMid.x, sourceMid.y);
+    ctx.quadraticCurveTo(controlX, controlY, targetMid.x, targetMid.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = positive
+      ? `rgba(74, 255, 212, ${threadAlpha})`
+      : `rgba(255, 109, 179, ${threadAlpha})`;
+    ctx.lineWidth = 0.9 + normalized * 0.9 + intensity * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(sourceMid.x, sourceMid.y);
+    ctx.quadraticCurveTo(controlX, controlY, targetMid.x, targetMid.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = positive
+      ? `rgba(74, 255, 212, ${0.12 + intensity * 0.18 + normalized * 0.18})`
+      : `rgba(255, 109, 179, ${0.12 + intensity * 0.18 + normalized * 0.18})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(targetMid.x, targetMid.y);
+    ctx.lineTo(orbitX, orbitY);
+    ctx.stroke();
+
+    ctx.strokeStyle = positive
+      ? `rgba(74, 255, 212, ${0.1 + intensity * 0.16 + normalized * 0.16})`
+      : `rgba(255, 109, 179, ${0.1 + intensity * 0.16 + normalized * 0.16})`;
+    ctx.strokeRect(
+      targetMid.x - 2 - normalized * 2,
+      targetMid.y - 2 - normalized,
+      4 + normalized * 4,
+      4 + normalized * 2
+    );
+
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.14 + intensity * 0.18 + normalized * 0.12})`;
+    ctx.fillRect(sourceFrom.x - 3, sourceFrom.y - 3, 6, 6);
+    ctx.fillRect(sourceTo.x - 3, sourceTo.y - 3, 6, 6);
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.16 + intensity * 0.2 + normalized * 0.18})`
+      : `rgba(255, 109, 179, ${0.16 + intensity * 0.2 + normalized * 0.18})`;
+    ctx.fillRect(targetFrom.x - 3, targetFrom.y - 3, 6, 6);
+    ctx.fillRect(targetTo.x - 3, targetTo.y - 3, 6, 6);
+
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.2 + intensity * 0.28})`;
+    ctx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.12 + intensity * 0.18})`;
+    ctx.fillRect(Math.round(echoPacketX) - 1, Math.round(echoPacketY) - 1, 2, 2);
+
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.2 + normalized * 0.18})`
+      : `rgba(255, 109, 179, ${0.18 + intensity * 0.2 + normalized * 0.18})`;
+    ctx.fillRect(Math.round(orbitX) - 1, Math.round(orbitY) - 1, 3, 3);
+
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.22})`
+      : `rgba(255, 109, 179, ${0.18 + intensity * 0.22})`;
+    ctx.fillRect(glyphX - 2, glyphY, 5, 1);
+    if (positive) {
+      ctx.fillRect(glyphX, glyphY - 2, 1, 5);
+    }
+
+    ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
+    ctx.fillRect(sourceFrom.x - 5, sourceFrom.y - 10, 10, 6);
+    ctx.fillRect(targetTo.x - 5, targetTo.y - 10, 10, 6);
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.24})`;
+    ctx.fillText(tag, sourceFrom.x, sourceFrom.y - 5);
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.58 + intensity * 0.24})`
+      : `rgba(255, 109, 179, ${0.58 + intensity * 0.24})`;
+    ctx.fillText(tag, targetTo.x, targetTo.y - 5);
+  }
+
+  for (let i = 0; i < biasHighlights.length; i += 1) {
+    const highlight = biasHighlights[i];
+    const sourceNode = sourceLayers[highlight.layerIndex + 1]?.[highlight.nodeIndex];
+    const targetNode = targetLayers[highlight.layerIndex + 1]?.[highlight.nodeIndex];
+    if (!sourceNode || !targetNode) {
+      continue;
+    }
+
+    const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
+    const positive = highlight.delta >= 0;
+    const pulse = 0.5 + Math.sin(time * 0.22 + i * 0.9) * 0.5;
+    const packetT = (time * 0.013 + i * 0.2) % 1;
+    const packetX = lerp(sourceNode.x, targetNode.x, packetT);
+    const packetY = lerp(sourceNode.y, targetNode.y, packetT);
+    const tag = `B${i + 1}`;
+
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.12 + intensity * 0.18 + pulse * 0.07})`;
+    ctx.beginPath();
+    ctx.moveTo(sourceNode.x, sourceNode.y);
+    ctx.lineTo(targetNode.x, targetNode.y);
+    ctx.stroke();
+
+    ctx.strokeStyle = positive
+      ? `rgba(74, 255, 212, ${0.12 + intensity * 0.16 + normalized * 0.18})`
+      : `rgba(255, 109, 179, ${0.12 + intensity * 0.16 + normalized * 0.18})`;
+    ctx.strokeRect(
+      targetNode.x - 3 - normalized * 2,
+      targetNode.y - 3 - normalized * 2,
+      6 + normalized * 4,
+      6 + normalized * 4
+    );
+
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.18 + intensity * 0.22 + pulse * 0.08})`;
+    ctx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.16 + intensity * 0.18 + pulse * 0.08})`;
+    ctx.fillRect(sourceNode.x - 3, sourceNode.y - 3, 6, 6);
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.2 + normalized * 0.18})`
+      : `rgba(255, 109, 179, ${0.18 + intensity * 0.2 + normalized * 0.18})`;
+    ctx.fillRect(targetNode.x - 3, targetNode.y - 3, 6, 6);
+    ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
+    ctx.fillRect(sourceNode.x - 6, sourceNode.y - 10, 12, 6);
+    ctx.fillRect(targetNode.x - 6, targetNode.y - 10, 12, 6);
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.22})`;
+    ctx.fillText(tag, sourceNode.x, sourceNode.y - 5);
+    ctx.fillStyle = positive
+      ? `rgba(74, 255, 212, ${0.56 + intensity * 0.24})`
+      : `rgba(255, 109, 179, ${0.56 + intensity * 0.24})`;
+    ctx.fillText(tag, targetNode.x, targetNode.y - 5);
+  }
+
+  ctx.restore();
+}
+
+function getExtinctionPlanProgress(scene, slotTiming, plan) {
+  const relativeFrame = scene.frame - scene.scanFrames - slotTiming.startFrame;
+  const durationFrames = slotTiming.durationFrames;
+  const normalizedProgress = clamp(relativeFrame / Math.max(1, durationFrames), 0, 1);
+  const phaseFrames = plan.inherited
+    ? {
+      build: 32,
+      buildPause: 14,
+      mutate: 38,
+      mutatePause: 16,
+      preview: 120,
+      pack: 18,
+      travel: 24,
+      implant: 18
+    }
+    : {
+      build: 10,
+      buildPause: 0,
+      mutate: 8,
+      mutatePause: 0,
+      preview: 0,
+      pack: 6,
+      travel: 10,
+      implant: 8
+    };
+
+  const buildEndFrame = phaseFrames.build;
+  const buildPauseEndFrame = buildEndFrame + phaseFrames.buildPause;
+  const mutationEndFrame = buildPauseEndFrame + phaseFrames.mutate;
+  const mutationPauseEndFrame = mutationEndFrame + phaseFrames.mutatePause;
+  const previewEndFrame = mutationPauseEndFrame + phaseFrames.preview;
+  const packEndFrame = previewEndFrame + phaseFrames.pack;
+  const transferEndFrame = packEndFrame + phaseFrames.travel;
+  const implantEndFrame = transferEndFrame + phaseFrames.implant;
+
+  return {
+    progress: normalizedProgress,
+    started: relativeFrame >= 0,
+    active: relativeFrame >= 0 && relativeFrame < durationFrames,
+    complete: relativeFrame >= durationFrames,
+    buildProgress: smooth01(clamp(relativeFrame / Math.max(1, phaseFrames.build), 0, 1)),
+    buildHoldActive: relativeFrame >= buildEndFrame && relativeFrame < buildPauseEndFrame,
+    mutationProgress: smooth01(clamp(
+      (relativeFrame - buildPauseEndFrame) / Math.max(1, phaseFrames.mutate),
+      0,
+      1
+    )),
+    mutationPauseActive: relativeFrame >= mutationEndFrame && relativeFrame < mutationPauseEndFrame,
+    previewProgress: smooth01(clamp(
+      (relativeFrame - mutationPauseEndFrame) / Math.max(1, phaseFrames.preview),
+      0,
+      1
+    )),
+    previewActive: phaseFrames.preview > 0 && relativeFrame >= mutationPauseEndFrame && relativeFrame < previewEndFrame,
+    packageProgress: smooth01(clamp(
+      (relativeFrame - previewEndFrame) / Math.max(1, phaseFrames.pack),
+      0,
+      1
+    )),
+    packageActive: relativeFrame >= previewEndFrame && relativeFrame < packEndFrame,
+    cubeTravelProgress: smooth01(clamp(
+      (relativeFrame - packEndFrame) / Math.max(1, phaseFrames.travel),
+      0,
+      1
+    )),
+    cubeTravelActive: relativeFrame >= packEndFrame && relativeFrame < transferEndFrame,
+    transferProgress: smooth01(clamp(
+      (relativeFrame - previewEndFrame) / Math.max(1, phaseFrames.pack + phaseFrames.travel),
+      0,
+      1
+    )),
+    implantProgress: smooth01(clamp(
+      (relativeFrame - transferEndFrame) / Math.max(1, phaseFrames.implant),
+      0,
+      1
+    )),
+    implantActive: relativeFrame >= transferEndFrame && relativeFrame < implantEndFrame
+  };
+}
+
+function drawIncubationEgg(ctx, plan, planState, x, y, isActive, flashPulse, label) {
+  const accent = plan.inherited ? "255, 241, 123" : "102, 220, 255";
+  const preHeat = planState.started ? planState.buildProgress * 0.18 : 0;
+  const shellCharge = clamp(
+    (planState.complete ? 1 : 0) + planState.implantProgress * 0.8 + planState.transferProgress * 0.18,
+    0,
+    1
+  );
+  const pulse = isActive ? 0.62 + flashPulse * 0.38 : 0.46 + flashPulse * 0.14;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(6, 18, 28, ${0.72 + preHeat * 0.08})`;
+  ctx.fillRect(x - 16, y + 12, 32, 18);
+  ctx.fillStyle = `rgba(${accent}, ${0.04 + preHeat * 0.1 + shellCharge * 0.12})`;
+  ctx.fillRect(x - 12, y + 18, 24, 12);
+  ctx.shadowBlur = isActive ? 8 + shellCharge * 14 : shellCharge > 0.92 ? 5 : 0;
+  ctx.shadowColor = `rgba(${accent}, ${0.12 + shellCharge * 0.18 + (isActive ? 0.06 : 0)})`;
+  ctx.fillStyle = `rgba(243, 251, 255, ${0.16 + preHeat * 0.08 + shellCharge * 0.42 + pulse * 0.06})`;
+  ctx.fillRect(x - 8, y + 16, 16, 10);
+  ctx.fillRect(x - 5, y + 10, 10, 18);
+  ctx.strokeStyle = `rgba(${accent}, ${0.14 + shellCharge * 0.5 + (isActive ? 0.18 : 0.04)})`;
+  ctx.strokeRect(x - 8, y + 16, 16, 10);
+  ctx.strokeRect(x - 5, y + 10, 10, 18);
+
+  if (shellCharge > 0.04) {
+    ctx.fillStyle = `rgba(${accent}, ${0.08 + shellCharge * 0.4})`;
+    ctx.fillRect(x - 3, y + 15, 6, 6);
+  }
+
+  if (planState.complete) {
+    ctx.fillStyle = `rgba(${accent}, ${0.18 + flashPulse * 0.12})`;
+    ctx.fillRect(x - 1, y + 7, 2, 2);
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.textAlign = "center";
+  ctx.font = "7px Courier New";
+  ctx.fillStyle = `rgba(${accent}, ${0.44 + (isActive ? 0.28 : 0.12)})`;
+  ctx.fillText(plan.inherited ? "DNA" : "RND", x, y + 4);
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.56 + (isActive ? 0.24 : 0.1)})`;
+  ctx.fillText(label, x, y + 39);
+  ctx.restore();
+}
+
+function drawBrainDataCube(ctx, x, y, accent, intensity, scale, pulse) {
+  const cubeSize = Math.max(8, Math.round((9 + intensity * 4) * scale));
+  const depth = Math.max(2, Math.round(2 + intensity * 2));
+  const halfSize = cubeSize * 0.5;
+  const coreHeight = Math.max(3, Math.round((cubeSize - 6) * clamp(0.34 + pulse * 0.26, 0.28, 0.82)));
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = `rgba(4, 12, 20, ${0.72 + intensity * 0.12})`;
+  ctx.fillRect(-halfSize, -halfSize, cubeSize, cubeSize);
+  ctx.strokeStyle = `rgba(${accent}, ${0.32 + intensity * 0.4})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-halfSize, -halfSize, cubeSize, cubeSize);
+
+  ctx.beginPath();
+  ctx.moveTo(-halfSize, -halfSize);
+  ctx.lineTo(-halfSize + depth, -halfSize - depth);
+  ctx.lineTo(halfSize + depth, -halfSize - depth);
+  ctx.lineTo(halfSize, -halfSize);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(halfSize, -halfSize);
+  ctx.lineTo(halfSize + depth, -halfSize - depth);
+  ctx.lineTo(halfSize + depth, halfSize - depth);
+  ctx.lineTo(halfSize, halfSize);
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(${accent}, ${0.18 + intensity * 0.22})`;
+  ctx.fillRect(-halfSize + 2, -halfSize + 2, cubeSize - 4, cubeSize - 4);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.28 + intensity * 0.24})`;
+  ctx.fillRect(-1, halfSize - 3 - coreHeight, 2, coreHeight);
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.22 + intensity * 0.16})`;
+  ctx.fillRect(-halfSize + 3, -halfSize + 3, cubeSize - 6, 2);
+
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.38 + intensity * 0.22})`;
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+}
+
+function drawExtinctionSpecimen(ctx, specimen, x, y, scale, heading, alpha, curlAmount, coilProgress = 0) {
+  if (!specimen || alpha <= 0.01) {
+    return;
+  }
+
+  const coil = clamp(coilProgress, 0, 1);
+  const lifeScale = specimen.lifeStage === "juvenile"
+    ? 0.78
+    : specimen.lifeStage === "egg"
+      ? 0.66
+      : 1;
+  const energyRatio = clamp(specimen.energy / CONFIG.maxEnergy, 0.08, 1);
+  const headLength = Math.max(10, Math.round((14 + energyRatio * 5) * lifeScale * scale));
+  const headHeight = Math.max(6, Math.round((6 + energyRatio * 8) * lifeScale * scale));
+  const segmentCount = specimen.lifeStage === "egg"
+    ? 0
+    : Math.max(1, Math.round(clampSegmentGene(specimen.segmentGene) * lifeScale));
+  const spacing = Math.max(6, Math.round((headLength * 0.4 + 2) * Math.max(0.82, lifeScale) * scale));
+  const headingX = Math.cos(heading);
+  const headingY = Math.sin(heading);
+  const normalX = -headingY;
+  const normalY = headingX;
+  const bodyColor = `hsla(${specimen.hue} 92% 62% / ${alpha})`;
+  const bodyShadow = `hsla(${specimen.hue} 95% 72% / ${0.28 * alpha})`;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  for (let i = segmentCount - 1; i >= 0; i -= 1) {
+    const progress = segmentCount <= 1 ? 0 : i / (segmentCount - 1);
+    const segLength = Math.max(8, Math.round(headLength * (0.82 - progress * 0.16)));
+    const segHeight = Math.max(5, Math.round(headHeight * (0.88 - progress * 0.2)));
+    const localX = -(headLength * 0.42 + spacing * (i + 1));
+    const lateral = curlAmount * (4 + i * 1.8) * (0.22 + progress * 0.4);
+    const normalSegmentX = x + headingX * localX + normalX * lateral;
+    const normalSegmentY = y + headingY * localX + normalY * lateral;
+    const normalSegmentAngle = heading + curlAmount * (0.03 + progress * 0.08);
+    const spiralRadius =
+      headLength * (0.18 + progress * 0.16) +
+      (i + 1) * Math.max(1.5, spacing * 0.11) * (0.9 - coil * 0.18);
+    const spiralAngle =
+      heading +
+      Math.PI * 0.54 +
+      (i + 1) * (0.62 + coil * 0.44) +
+      curlAmount * 0.06;
+    const spiralSegmentX = x + Math.cos(spiralAngle) * spiralRadius;
+    const spiralSegmentY = y + Math.sin(spiralAngle) * spiralRadius * 0.92;
+    const spiralSegmentAngle = spiralAngle + Math.PI * 0.5;
+    const segmentX = lerp(normalSegmentX, spiralSegmentX, coil);
+    const segmentY = lerp(normalSegmentY, spiralSegmentY, coil);
+    const segmentAngle = lerp(normalSegmentAngle, spiralSegmentAngle, coil);
+
+    ctx.save();
+    ctx.translate(segmentX, segmentY);
+    ctx.rotate(segmentAngle);
+    ctx.fillStyle = bodyShadow;
+    ctx.fillRect(-Math.round(segLength * 0.5) - 1, -Math.round(segHeight * 0.5), segLength + 2, segHeight);
+    ctx.fillStyle = "#14283b";
+    ctx.fillRect(-Math.round(segLength * 0.46), -Math.round(segHeight * 0.42), Math.round(segLength * 0.92), Math.round(segHeight * 0.84));
+    ctx.fillStyle = `hsla(${specimen.hue} 92% ${Math.round(62 - progress * 10)}% / ${alpha})`;
+    ctx.fillRect(-Math.round(segLength * 0.4), -Math.round(segHeight * 0.38), Math.round(segLength * 0.8), Math.round(segHeight * 0.76));
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(heading);
+  ctx.fillStyle = bodyShadow;
+  ctx.fillRect(-Math.round(headLength * 0.52), -Math.round(headHeight * 0.52), Math.round(headLength * 1.04), Math.round(headHeight * 1.04));
+  ctx.fillStyle = "#14283b";
+  ctx.fillRect(-Math.round(headLength * 0.46), -Math.round(headHeight * 0.44), Math.round(headLength * 0.92), Math.round(headHeight * 0.88));
+  ctx.fillStyle = bodyColor;
+  ctx.fillRect(-Math.round(headLength * 0.4), -Math.round(headHeight * 0.38), Math.round(headLength * 0.8), Math.round(headHeight * 0.76));
+  ctx.fillStyle = `hsla(${specimen.hue} 100% 82% / ${0.24 * alpha})`;
+  ctx.fillRect(Math.round(headLength * 0.06), -Math.max(2, Math.round(headHeight * 0.28)), Math.max(3, Math.round(headLength * 0.22)), Math.max(3, Math.round(headHeight * 0.54)));
+
+  const eyeOffsetX = Math.round(headLength * 0.16);
+  const eyeTopY = -Math.max(3, Math.round(headHeight * 0.3)) + 1;
+  const eyeBottomY = Math.max(1, Math.round(headHeight * 0.12)) + 1;
+  ctx.fillStyle = "#031117";
+  ctx.fillRect(eyeOffsetX, eyeTopY, 3, 3);
+  ctx.fillRect(eyeOffsetX, eyeBottomY, 3, 3);
+  ctx.fillStyle = "#dffcff";
+  ctx.fillRect(eyeOffsetX + 1, eyeTopY + 1, 1, 1);
+  ctx.fillRect(eyeOffsetX + 1, eyeBottomY + 1, 1, 1);
+  ctx.fillStyle = "#1c394f";
+  ctx.fillRect(Math.round(headLength * 0.46), -1, 3, 2);
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawContainmentCell(ctx, x, y, width, height, lockProgress, pulse) {
+  const depth = 7;
+  const glow = 0.18 + lockProgress * 0.24 + pulse * 0.08;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = `rgba(102, 220, 255, ${glow})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+  ctx.strokeRect(x + depth, y - depth, width, height);
+
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + depth, y - depth);
+  ctx.moveTo(x + width, y);
+  ctx.lineTo(x + width + depth, y - depth);
+  ctx.moveTo(x, y + height);
+  ctx.lineTo(x + depth, y + height - depth);
+  ctx.moveTo(x + width, y + height);
+  ctx.lineTo(x + width + depth, y + height - depth);
+  ctx.stroke();
+
+  const bracket = 12;
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.12 + lockProgress * 0.14 + pulse * 0.06})`;
+  ctx.fillRect(x - 1, y - 1, bracket, 1);
+  ctx.fillRect(x - 1, y - 1, 1, bracket);
+  ctx.fillRect(x + width - bracket + 1, y - 1, bracket, 1);
+  ctx.fillRect(x + width, y - 1, 1, bracket);
+  ctx.fillRect(x - 1, y + height, bracket, 1);
+  ctx.fillRect(x - 1, y + height - bracket + 1, 1, bracket);
+  ctx.fillRect(x + width - bracket + 1, y + height, bracket, 1);
+  ctx.fillRect(x + width, y + height - bracket + 1, 1, bracket);
+
+  for (let rail = 0; rail < 4; rail += 1) {
+    const railY = y + 8 + rail * ((height - 16) / 3);
+    ctx.fillStyle = rail % 2 === 0
+      ? `rgba(102, 220, 255, ${0.06 + lockProgress * 0.06})`
+      : `rgba(255, 109, 179, ${0.04 + lockProgress * 0.05})`;
+    ctx.fillRect(x + 6, railY, width - 12, 1);
+  }
+
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.16 + lockProgress * 0.12})`;
+  ctx.fillRect(x + 4, y + 4, width - 8, 1);
+  ctx.restore();
+}
+
+function drawSpecimenHeadScanPanel(ctx, specimen, brain, x, y, width, height, scanProgress, time, headAnchorX, headAnchorY) {
+  if (!specimen) {
+    return;
+  }
+
+  const scanActive = scanProgress > 0.01;
+  const pulse = 0.5 + Math.sin(time * 0.12 + 1.2) * 0.5;
+  const insetX = x + 14;
+  const insetY = y + 18;
+  const insetW = width - 28;
+  const insetH = Math.min(108, Math.round(height * 0.48));
+  const headWidth = Math.max(82, Math.round(insetW * 0.72));
+  const headHeight = Math.max(46, Math.round(insetH * 0.62));
+  const headCenterX = insetX + insetW * 0.48;
+  const headCenterY = insetY + insetH * 0.58;
+  const headOuterW = Math.round(headWidth * 0.92);
+  const headOuterH = Math.round(headHeight * 0.94);
+  const headInnerW = Math.round(headWidth * 0.82);
+  const headInnerH = Math.round(headHeight * 0.84);
+  const headFillW = Math.round(headWidth * 0.72);
+  const headFillH = Math.round(headHeight * 0.74);
+  const brainX = Math.round(headCenterX - headWidth * 0.34);
+  const brainY = Math.round(headCenterY - headHeight * 0.3);
+  const brainW = Math.round(headWidth * 0.42);
+  const brainH = Math.round(headHeight * 0.6);
+  const scanLineX = insetX + 8 + (insetW - 16) * scanProgress;
+  const bodyColor = `hsla(${specimen.hue} 92% 62% / 0.96)`;
+  const bodyShadow = `hsla(${specimen.hue} 95% 72% / 0.34)`;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(5, 15, 24, 0.86)";
+  ctx.fillRect(insetX, insetY, insetW, insetH);
+  ctx.strokeStyle = `rgba(102, 220, 255, ${0.22 + scanProgress * 0.18})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(insetX, insetY, insetW, insetH);
+  ctx.fillStyle = `rgba(102, 220, 255, ${0.1 + pulse * 0.06})`;
+  ctx.fillRect(insetX + 2, insetY + 2, insetW - 4, 1);
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.72 + pulse * 0.12})`;
+  ctx.font = "8px Courier New";
+  ctx.textAlign = "center";
+  ctx.fillText(
+    !scanActive
+      ? "HEAD ZOOM // STANDBY"
+      : scanProgress < 0.995
+        ? "HEAD ZOOM // ACTIVE SCAN"
+        : "HEAD ZOOM // SCAN LOCKED",
+    x + width * 0.5,
+    insetY + insetH + 12
+  );
+
+  if (scanActive && Number.isFinite(headAnchorX) && Number.isFinite(headAnchorY)) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(102, 220, 255, ${0.12 + scanProgress * 0.24})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(headAnchorX, headAnchorY);
+    ctx.lineTo(x + width * 0.24, y + height * 0.58);
+    ctx.lineTo(insetX + 12, insetY + insetH - 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.fillStyle = bodyShadow;
+  ctx.fillRect(
+    Math.round(headCenterX - headOuterW * 0.5) - 2,
+    Math.round(headCenterY - headOuterH * 0.5) - 1,
+    headOuterW + 4,
+    headOuterH + 2
+  );
+  ctx.fillStyle = "#14283b";
+  ctx.fillRect(
+    Math.round(headCenterX - headInnerW * 0.5),
+    Math.round(headCenterY - headInnerH * 0.5),
+    headInnerW,
+    headInnerH
+  );
+  ctx.fillStyle = bodyColor;
+  ctx.fillRect(
+    Math.round(headCenterX - headFillW * 0.5),
+    Math.round(headCenterY - headFillH * 0.5),
+    headFillW,
+    headFillH
+  );
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + pulse * 0.08})`;
+  ctx.fillRect(
+    Math.round(headCenterX + headFillW * 0.04),
+    Math.round(headCenterY - headFillH * 0.28),
+    Math.max(6, Math.round(headFillW * 0.2)),
+    Math.max(6, Math.round(headFillH * 0.56))
+  );
+
+  if (brain && scanActive) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(brainX, brainY, brainW, brainH);
+    ctx.clip();
+    drawBrainBlueprint(ctx, brain, brainX, brainY, brainW, brainH, {
+      alpha: 0.16 + scanProgress * 0.48,
+      fluxAmount: 0.08 + scanProgress * 0.28 + pulse * 0.04,
+      fluxPacketBudget: 4,
+      nodePulseBudget: 2,
+      fluxSpeedScale: 0.18,
+      fluxSelectorSpeed: 0.1,
+      nodePulseSpeed: 0.05,
+      nodePulseSelectorSpeed: 0.12,
+      fluxPhase: 0.19,
+      time
+    });
+    ctx.restore();
+  }
+
+  const eyeX = Math.round(headCenterX + headFillW * 0.14);
+  const eyeTopY = Math.round(headCenterY - headFillH * 0.26);
+  const eyeBottomY = Math.round(headCenterY + headFillH * 0.06);
+  ctx.fillStyle = "#031117";
+  ctx.fillRect(eyeX, eyeTopY, 5, 5);
+  ctx.fillRect(eyeX, eyeBottomY, 5, 5);
+  ctx.fillStyle = "#dffcff";
+  ctx.fillRect(eyeX + 2, eyeTopY + 2, 1, 1);
+  ctx.fillRect(eyeX + 2, eyeBottomY + 2, 1, 1);
+  ctx.fillStyle = "#1c394f";
+  ctx.fillRect(Math.round(headCenterX + headFillW * 0.38), Math.round(headCenterY - 1), 6, 3);
+
+  if (scanActive) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = `rgba(102, 220, 255, ${0.08 + scanProgress * 0.08})`;
+    ctx.fillRect(scanLineX - 10, insetY - 2, 20, insetH + 4);
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.14 + pulse * 0.12})`;
+    ctx.fillRect(scanLineX - 1, insetY - 4, 2, insetH + 8);
+    for (let sample = 0; sample < 4; sample += 1) {
+      const sampleY = insetY + 12 + sample * 16 + Math.sin(time * 0.17 + sample * 0.8) * 2;
+      ctx.fillStyle = sample % 2 === 0
+        ? `rgba(102, 220, 255, ${0.18 + scanProgress * 0.2})`
+        : `rgba(255, 109, 179, ${0.18 + scanProgress * 0.18})`;
+      ctx.fillRect(scanLineX + 8 + sample * 4, sampleY, 3, 2);
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = "rgba(221, 250, 255, 0.44)";
+    ctx.font = "8px Courier New";
+    ctx.fillText("WAITING FOR CONTAINMENT LOCK", x + width * 0.5, insetY + insetH * 0.54);
+  }
+
+  ctx.textAlign = "left";
+  ctx.restore();
+}
+
+function drawRandomBrainGenesis(ctx, brain, x, y, width, height, buildProgress, packageProgress, time) {
+  if (!brain || buildProgress <= 0.01) {
+    return;
+  }
+
+  const blueprintLayout = getBrainBlueprintLayout(x, y, width, height);
+  const nodes = blueprintLayout.layers;
+  const centerX = x + width * 0.5;
+  const centerY = y + height * 0.5;
+  const flatNodes = [];
+
+  for (let i = 0; i < blueprintLayout.flatNodes.length; i += 1) {
+    const ref = blueprintLayout.flatNodes[i];
+    flatNodes.push(nodes[ref.layerIndex][ref.nodeIndex]);
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const corePulse = 0.5 + Math.sin(time * 0.12) * 0.5;
+  const shellSize = 12 + buildProgress * 18;
+  ctx.strokeStyle = `rgba(102, 220, 255, ${0.16 + buildProgress * 0.26})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(centerX - shellSize * 0.5, centerY - shellSize * 0.5, shellSize, shellSize);
+  ctx.strokeStyle = `rgba(255, 109, 179, ${0.12 + buildProgress * 0.2})`;
+  ctx.strokeRect(centerX - shellSize * 0.34, centerY - shellSize * 0.34, shellSize * 0.68, shellSize * 0.68);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.18 + buildProgress * 0.26 + corePulse * 0.08})`;
+  ctx.fillRect(centerX - 2, centerY - 2, 4, 4);
+
+  const layerRevealStep = 1 / Math.max(1, nodes.length);
+  for (let layerIndex = 0; layerIndex < nodes.length; layerIndex += 1) {
+    const reveal = smooth01(clamp((buildProgress - layerIndex * layerRevealStep * 0.55) / 0.45, 0, 1));
+    if (reveal <= 0.01) {
+      continue;
+    }
+    const layerX = nodes[layerIndex][0].x;
+    const barHeight = height - 16;
+    ctx.fillStyle = `rgba(102, 220, 255, ${0.03 + reveal * 0.06})`;
+    ctx.fillRect(layerX - 1, y + 8, 2, barHeight);
+    ctx.fillStyle = `rgba(255, 241, 123, ${0.05 + reveal * 0.08})`;
+    ctx.fillRect(layerX - 6, centerY - (barHeight * reveal) * 0.5, 12, barHeight * reveal);
+  }
+
+  const packetBudget = Math.min(10, flatNodes.length);
+  for (let packetIndex = 0; packetIndex < packetBudget; packetIndex += 1) {
+    const node = flatNodes[(Math.floor(time * 0.18) + packetIndex * 7) % flatNodes.length];
+    const reveal = clamp(buildProgress * 1.28 - packetIndex * 0.06, 0, 1);
+    if (reveal <= 0.02) {
+      continue;
+    }
+
+    const orbitRadius = 16 + (packetIndex % 4) * 7;
+    const startAngle = time * 0.06 + packetIndex * 0.9;
+    const startX = centerX + Math.cos(startAngle) * orbitRadius;
+    const startY = centerY + Math.sin(startAngle) * orbitRadius * 0.7;
+    const packetT = smooth01(reveal);
+    const packetX = lerp(startX, node.x, packetT);
+    const packetY = lerp(startY, node.y, packetT);
+
+    ctx.strokeStyle = packetIndex % 2 === 0
+      ? `rgba(102, 220, 255, ${0.08 + reveal * 0.12})`
+      : `rgba(255, 109, 179, ${0.06 + reveal * 0.1})`;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(packetX, packetY);
+    ctx.stroke();
+
+    ctx.fillStyle = packetIndex % 2 === 0
+      ? `rgba(102, 220, 255, ${0.22 + reveal * 0.24})`
+      : `rgba(255, 109, 179, ${0.18 + reveal * 0.22})`;
+    ctx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+  }
+
+  if (packageProgress > 0.01) {
+    const braceInset = packageProgress * 18;
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.16 + packageProgress * 0.26})`;
+    ctx.strokeRect(x + braceInset, y + braceInset, width - braceInset * 2, height - braceInset * 2);
+  }
+
+  ctx.restore();
+}
+
+function drawExtinctionScene() {
+  const scene = state.extinctionScene;
+  if (!scene) {
+    return;
+  }
+
+  const progress = clamp(scene.frame / scene.totalFrames, 0, 1);
+  const sceneProgress = smooth01(progress);
+  const overlayX = WIDTH * 0.045;
+  const overlayY = HEIGHT * 0.04;
+  const overlayW = WIDTH * 0.91;
+  const overlayH = HEIGHT * 0.9;
+  const chamberTop = overlayY + 108;
+  const forgeW = 504;
+  const forgeH = 236;
+  const forgeX = overlayX + overlayW - forgeW - 28;
+  const leftClusterX = overlayX + 28;
+  const leftClusterW = forgeX - leftClusterX - 24;
+  const specimenW = Math.max(220, Math.round(leftClusterW * 0.38));
+  const specimenH = 208;
+  const winnerW = Math.max(236, leftClusterW - specimenW - 18);
+  const winnerH = 186;
+  const specimenX = leftClusterX;
+  const specimenY = chamberTop + 4;
+  const winnerX = specimenX + specimenW + 18;
+  const winnerY = chamberTop + 20;
+  const forgeY = chamberTop - 2;
+  const specimenCenterX = specimenX + specimenW * 0.5;
+  const winnerCenterX = winnerX + winnerW * 0.5;
+  const forgeCenterX = forgeX + forgeW * 0.5;
+  const scanFrames = scene.scanFrames;
+  const outroFrames = scene.outroFrames;
+  const generationFrame = Math.max(0, scene.frame - scanFrames);
+  const generationFramesTotal = scene.generationFramesTotal;
+  let activeIndex = -1;
+
+  if (scene.plans.length > 0 && scene.frame >= scanFrames && generationFrame < generationFramesTotal) {
+    for (let slotIndex = 0; slotIndex < scene.slotTimings.length; slotIndex += 1) {
+      const slotTiming = scene.slotTimings[slotIndex];
+      if (generationFrame >= slotTiming.startFrame && generationFrame < slotTiming.endFrame) {
+        activeIndex = slotIndex;
+        break;
+      }
+    }
+  }
+
+  const activePlanIndex = activeIndex >= 0 ? scene.generationOrder[activeIndex] : -1;
+  const activePlan = activePlanIndex >= 0 ? scene.plans[activePlanIndex] : null;
+  const activeSlotTiming = activeIndex >= 0 ? scene.slotTimings[activeIndex] : null;
+  const activePlanState = activePlan
+    ? getExtinctionPlanProgress(scene, activeSlotTiming, activePlan)
+    : null;
+  const scanProgress = scene.sourceBrain ? smooth01(clamp(scene.frame / Math.max(1, scanFrames), 0, 1)) : 1;
+  const sourceSpecimenPullProgress = scene.sourceSpecimen
+    ? smooth01(clamp((scanProgress - 0.06) / 0.46, 0, 1))
+    : 1;
+  const sourceSpecimenCoilProgress = scene.sourceSpecimen
+    ? smooth01(clamp((scanProgress - 0.14) / 0.36, 0, 1))
+    : 1;
+  const sourceSpecimenSettleProgress = scene.sourceSpecimen
+    ? smooth01(clamp((scanProgress - 0.42) / 0.18, 0, 1))
+    : 1;
+  const specimenHeadScanProgress = scene.sourceBrain
+    ? smooth01(clamp((scanProgress - 0.6) / 0.34, 0, 1))
+    : 1;
+  const winnerBrainActivation = scene.sourceBrain
+    ? smooth01(clamp((scene.frame - scanFrames) / 28, 0, 1))
+    : 1;
+  const forgePulse = 0.5 + Math.sin(scene.frame * 0.065) * 0.5;
+  const flashPulse = 0.5 + Math.sin(scene.frame * 0.11 + 1.4) * 0.5;
+  const chamberFlux = activePlanState
+    ? 0.44 +
+      activePlanState.buildProgress * 0.26 +
+      activePlanState.mutationProgress * 0.24 +
+      activePlanState.transferProgress * 0.18 +
+      activePlanState.implantProgress * 0.14
+    : 0.16 + forgePulse * 0.12;
+  const sweepX = overlayX + 54 + (overlayW - 108) * (0.5 + Math.sin(scene.frame * 0.018 - 1.2) * 0.5);
+  const sweepY = overlayY + 48 + (overlayH - 96) * (0.5 + Math.sin(scene.frame * 0.015 + 0.9) * 0.5);
+  const containmentBoxW = Math.min(104, specimenW - 72);
+  const containmentBoxH = 62;
+  const containmentBoxX = specimenCenterX - containmentBoxW * 0.5;
+  const containmentBoxY = specimenY + specimenH - containmentBoxH - 28;
+  const sourceSpecimenTargetX = containmentBoxX + containmentBoxW * 0.5;
+  const sourceSpecimenTargetY = containmentBoxY + containmentBoxH * 0.5 + 2;
+  const sourceSpecimenX = scene.sourceSpecimen
+    ? lerp(scene.sourceSpecimen.x, sourceSpecimenTargetX, sourceSpecimenPullProgress)
+    : sourceSpecimenTargetX;
+  const sourceSpecimenY = scene.sourceSpecimen
+    ? lerp(scene.sourceSpecimen.y, sourceSpecimenTargetY, sourceSpecimenPullProgress)
+    : sourceSpecimenTargetY;
+  const sourceSpecimenHeading = scene.sourceSpecimen
+    ? scene.sourceSpecimen.heading
+    : -0.18;
+  const sourceSpecimenScale = lerp(1, 0.72, sourceSpecimenPullProgress) * (1 - sourceSpecimenSettleProgress * 0.03);
+  const sourceSpecimenAlpha = 0.92 - sourceSpecimenSettleProgress * 0.24;
+  const sourceSpecimenCurl =
+    (0.22 + sourceSpecimenPullProgress * 0.82) +
+    sourceSpecimenCoilProgress * 4.2 +
+    (0.14 + flashPulse * 0.12) * sourceSpecimenSettleProgress;
+  const sourceSpecimenHeadX = sourceSpecimenX + Math.cos(sourceSpecimenHeading) * 6 * sourceSpecimenScale;
+  const sourceSpecimenHeadY = sourceSpecimenY + Math.sin(sourceSpecimenHeading) * 6 * sourceSpecimenScale;
+  const phaseLabel = scene.sourceBrain && scene.frame < scanFrames
+    ? sourceSpecimenPullProgress < 0.995
+      ? "CAPTURING LONGEST-LIVED SPECIMEN"
+      : "SCANNING LONGEST-LIVED BRAIN"
+    : activePlan
+      ? `FORGING BRAIN ${String(activeIndex + 1).padStart(2, "0")} / ${String(scene.plans.length).padStart(2, "0")}`
+      : "NEXT LINEAGE READY";
+  let detailLabel = "ALL EGGS IMPRINTED";
+  if (scene.sourceBrain && scene.frame < scanFrames) {
+    detailLabel = sourceSpecimenPullProgress < 0.995
+      ? "SPECIMEN TRANSFER // CONTAINMENT LOCK"
+      : specimenHeadScanProgress < 0.995
+        ? "SPECIMEN HEAD SCAN // WINNER MATRIX LOCKED"
+        : "SCAN LOCKED // WINNER MATRIX READY";
+  } else if (activePlan) {
+    if (activePlanState?.packageActive) {
+      detailLabel = "PACKAGING BRAIN INTO DATA CUBE";
+    } else if (activePlanState?.cubeTravelActive) {
+      detailLabel = "DATA CUBE TRANSFER TO EGG";
+    } else if (activePlanState?.buildHoldActive || activePlanState?.mutationPauseActive) {
+      detailLabel = activePlan.inherited
+        ? "LEGACY STITCH MAP HOLD // PHASE LOCK"
+        : "FAST SYNTHESIS STABILIZING";
+    } else if (activePlanState?.previewActive) {
+      detailLabel = activePlan.inherited
+        ? "DESCENDANT NEURAL MAP LOCKED // PRE-IMPLANT HOLD"
+        : "SYNTHESIS PATTERN LOCKED // PRE-IMPLANT HOLD";
+    } else {
+      detailLabel = activePlan.inherited
+        ? "LEGACY STITCH MAP + LIVE MUTATION EDITS"
+        : "RANDOM BRAIN SYNTHESIS";
+    }
+  }
+
+  worldCtx.save();
+  const overlayGradient = worldCtx.createLinearGradient(overlayX, overlayY, overlayX, overlayY + overlayH);
+  overlayGradient.addColorStop(0, "rgba(2, 11, 22, 0.92)");
+  overlayGradient.addColorStop(0.45, "rgba(3, 13, 25, 0.86)");
+  overlayGradient.addColorStop(1, "rgba(2, 8, 16, 0.92)");
+  worldCtx.fillStyle = overlayGradient;
+  worldCtx.fillRect(overlayX, overlayY, overlayW, overlayH);
+  worldCtx.globalCompositeOperation = "lighter";
+  const verticalSweep = worldCtx.createLinearGradient(sweepX - 34, overlayY, sweepX + 34, overlayY);
+  verticalSweep.addColorStop(0, "rgba(0, 0, 0, 0)");
+  verticalSweep.addColorStop(0.45, `rgba(102, 220, 255, ${0.022 + forgePulse * 0.026})`);
+  verticalSweep.addColorStop(0.5, `rgba(255, 241, 123, ${0.036 + flashPulse * 0.03})`);
+  verticalSweep.addColorStop(0.55, `rgba(102, 220, 255, ${0.022 + forgePulse * 0.026})`);
+  verticalSweep.addColorStop(1, "rgba(0, 0, 0, 0)");
+  worldCtx.fillStyle = verticalSweep;
+  worldCtx.fillRect(sweepX - 34, overlayY + 8, 68, overlayH - 16);
+  const horizontalSweep = worldCtx.createLinearGradient(overlayX, sweepY - 44, overlayX, sweepY + 44);
+  horizontalSweep.addColorStop(0, "rgba(0, 0, 0, 0)");
+  horizontalSweep.addColorStop(0.45, `rgba(74, 255, 212, ${0.026 + forgePulse * 0.026})`);
+  horizontalSweep.addColorStop(0.5, `rgba(255, 109, 179, ${0.026 + flashPulse * 0.03})`);
+  horizontalSweep.addColorStop(0.55, `rgba(74, 255, 212, ${0.026 + forgePulse * 0.026})`);
+  horizontalSweep.addColorStop(1, "rgba(0, 0, 0, 0)");
+  worldCtx.fillStyle = horizontalSweep;
+  worldCtx.fillRect(overlayX + 8, sweepY - 44, overlayW - 16, 88);
+  worldCtx.globalCompositeOperation = "source-over";
+  worldCtx.shadowBlur = 10 + forgePulse * 8;
+  worldCtx.shadowColor = `rgba(102, 220, 255, ${0.14 + forgePulse * 0.16})`;
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.28)";
+  worldCtx.lineWidth = 2;
+  worldCtx.strokeRect(overlayX, overlayY, overlayW, overlayH);
+  worldCtx.shadowBlur = 0;
+
+  const bracketSize = 18;
+  worldCtx.fillStyle = `rgba(102, 220, 255, ${0.26 + forgePulse * 0.12})`;
+  worldCtx.fillRect(overlayX + 8, overlayY + 8, bracketSize, 2);
+  worldCtx.fillRect(overlayX + 8, overlayY + 8, 2, bracketSize);
+  worldCtx.fillRect(overlayX + overlayW - bracketSize - 8, overlayY + 8, bracketSize, 2);
+  worldCtx.fillRect(overlayX + overlayW - 10, overlayY + 8, 2, bracketSize);
+  worldCtx.fillRect(overlayX + 8, overlayY + overlayH - 10, bracketSize, 2);
+  worldCtx.fillRect(overlayX + 8, overlayY + overlayH - bracketSize - 8, 2, bracketSize);
+  worldCtx.fillRect(overlayX + overlayW - bracketSize - 8, overlayY + overlayH - 10, bracketSize, 2);
+  worldCtx.fillRect(overlayX + overlayW - 10, overlayY + overlayH - bracketSize - 8, 2, bracketSize);
+
+  for (let y = overlayY + 8; y < overlayY + overlayH; y += 14) {
+    worldCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.03)" : "rgba(102, 220, 255, 0.014)";
+    worldCtx.fillRect(overlayX + 4, y, overlayW - 8, 1);
+  }
+
+  worldCtx.fillStyle = `rgba(74, 255, 212, ${0.08 + sceneProgress * 0.1})`;
+  worldCtx.fillRect(overlayX + 22, overlayY + 74, (overlayW - 44) * sceneProgress, 3);
+  worldCtx.fillStyle = "#ddfaff";
+  worldCtx.font = "16px Courier New";
+  worldCtx.shadowBlur = 5 + forgePulse * 6;
+  worldCtx.shadowColor = `rgba(102, 220, 255, ${0.14 + forgePulse * 0.18})`;
+  worldCtx.fillText("EXTINCTION GENE FOUNDRY", overlayX + 22, overlayY + 28);
+  worldCtx.shadowBlur = 0;
+  worldCtx.font = "12px Courier New";
+  worldCtx.fillStyle = `rgba(139, 191, 202, ${0.82 + forgePulse * 0.16})`;
+  worldCtx.fillText(phaseLabel, overlayX + 22, overlayY + 48);
+  worldCtx.fillText(detailLabel, overlayX + 22, overlayY + 64);
+  worldCtx.fillText(
+    `INHERITED ${String(scene.inheritedSeeds).padStart(2, "0")} // RANDOM ${String(scene.randomSeeds).padStart(2, "0")}`,
+    overlayX + 22,
+    overlayY + 82
+  );
+
+  if (scene.sourceBrain) {
+    const specimenGradient = worldCtx.createLinearGradient(
+      specimenX,
+      specimenY - 16,
+      specimenX,
+      specimenY + specimenH + 16
+    );
+    specimenGradient.addColorStop(0, `rgba(12, 24, 36, ${0.9 + forgePulse * 0.02})`);
+    specimenGradient.addColorStop(1, `rgba(6, 14, 22, ${0.9 + forgePulse * 0.02})`);
+    worldCtx.fillStyle = specimenGradient;
+    worldCtx.fillRect(specimenX - 14, specimenY - 16, specimenW + 28, specimenH + 32);
+    worldCtx.fillStyle = `rgba(102, 220, 255, ${0.04 + scanProgress * 0.06 + forgePulse * 0.03})`;
+    worldCtx.fillRect(specimenX - 14, specimenY - 16, specimenW + 28, specimenH + 32);
+    worldCtx.shadowBlur = 5 + scanProgress * 4;
+    worldCtx.shadowColor = `rgba(102, 220, 255, ${0.16 + scanProgress * 0.18})`;
+    worldCtx.strokeStyle = "rgba(102, 220, 255, 0.3)";
+    worldCtx.strokeRect(specimenX - 10, specimenY - 12, specimenW + 20, specimenH + 24);
+    worldCtx.shadowBlur = 0;
+    worldCtx.fillStyle = "#8ed7ff";
+    worldCtx.font = "12px Courier New";
+    worldCtx.textAlign = "center";
+    worldCtx.fillText("SPECIMEN LOCK", specimenCenterX, specimenY - 18);
+    worldCtx.textAlign = "left";
+
+    const winnerGradient = worldCtx.createLinearGradient(
+      winnerX,
+      winnerY - 16,
+      winnerX,
+      winnerY + winnerH + 16
+    );
+    winnerGradient.addColorStop(0, `rgba(14, 24, 34, ${0.88 + winnerBrainActivation * 0.03})`);
+    winnerGradient.addColorStop(1, `rgba(7, 15, 23, ${0.88 + winnerBrainActivation * 0.03})`);
+    worldCtx.fillStyle = winnerGradient;
+    worldCtx.fillRect(winnerX - 14, winnerY - 16, winnerW + 28, winnerH + 32);
+    worldCtx.fillStyle = `rgba(255, 241, 123, ${0.02 + winnerBrainActivation * 0.08 + forgePulse * 0.02})`;
+    worldCtx.fillRect(winnerX - 14, winnerY - 16, winnerW + 28, winnerH + 32);
+    worldCtx.shadowBlur = 4 + winnerBrainActivation * 5;
+    worldCtx.shadowColor = `rgba(255, 241, 123, ${0.08 + winnerBrainActivation * 0.2})`;
+    worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.12 + winnerBrainActivation * 0.28})`;
+    worldCtx.strokeRect(winnerX - 10, winnerY - 12, winnerW + 20, winnerH + 24);
+    worldCtx.shadowBlur = 0;
+    worldCtx.fillStyle = "#fff17b";
+    worldCtx.font = "12px Courier New";
+    worldCtx.textAlign = "center";
+    worldCtx.fillText(`WINNER BRAIN G${scene.sourceGeneration}`, winnerCenterX, winnerY - 18);
+    worldCtx.fillStyle = winnerBrainActivation > 0.98
+      ? "rgba(255, 241, 123, 0.78)"
+      : "rgba(139, 191, 202, 0.76)";
+    worldCtx.fillText(
+      winnerBrainActivation > 0.98 ? "SCAN LOCKED // BRAIN ACTIVE" : "AWAITING SPECIMEN SCAN",
+      winnerCenterX,
+      winnerY + winnerH + 18
+    );
+    worldCtx.textAlign = "left";
+
+    if (scene.sourceSpecimen) {
+      const beamAlpha = 0.08 + sourceSpecimenPullProgress * 0.24;
+      const beamStartX = containmentBoxX + containmentBoxW * 0.5;
+      const beamStartY = containmentBoxY + containmentBoxH * 0.5;
+
+      worldCtx.save();
+      worldCtx.globalCompositeOperation = "lighter";
+      worldCtx.strokeStyle = `rgba(255, 241, 123, ${beamAlpha})`;
+      worldCtx.lineWidth = 1.1 + sourceSpecimenPullProgress * 1.1;
+      worldCtx.beginPath();
+      worldCtx.moveTo(beamStartX, beamStartY);
+      worldCtx.lineTo(sourceSpecimenX, sourceSpecimenY);
+      worldCtx.stroke();
+
+      if (sourceSpecimenPullProgress < 0.12) {
+        const lockSize = 18 + flashPulse * 2;
+        worldCtx.strokeStyle = `rgba(102, 220, 255, ${0.18 + (1 - sourceSpecimenPullProgress) * 0.24})`;
+        worldCtx.strokeRect(
+          Math.round(scene.sourceSpecimen.x - lockSize * 0.5),
+          Math.round(scene.sourceSpecimen.y - lockSize * 0.5),
+          Math.round(lockSize),
+          Math.round(lockSize)
+        );
+      }
+
+      for (let packet = 0; packet < 2; packet += 1) {
+        const packetT = clamp(sourceSpecimenPullProgress - packet * 0.18, 0, 1);
+        const packetX = lerp(scene.sourceSpecimen.x, beamStartX, packetT);
+        const packetY = lerp(scene.sourceSpecimen.y, beamStartY, packetT);
+        worldCtx.fillStyle = `rgba(255, 241, 123, ${0.16 + sourceSpecimenPullProgress * 0.2})`;
+        worldCtx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+      }
+      worldCtx.restore();
+    }
+
+    drawContainmentCell(
+      worldCtx,
+      containmentBoxX,
+      containmentBoxY,
+      containmentBoxW,
+      containmentBoxH,
+      sourceSpecimenPullProgress,
+      flashPulse
+    );
+
+    worldCtx.font = "8px Courier New";
+    worldCtx.fillStyle = `rgba(221, 250, 255, ${0.6 + sourceSpecimenPullProgress * 0.16})`;
+    worldCtx.textAlign = "center";
+    worldCtx.fillText("HOLLOW CONTAINMENT CELL", specimenCenterX, containmentBoxY - 8);
+    worldCtx.textAlign = "left";
+
+    worldCtx.fillStyle = `rgba(102, 220, 255, ${0.08 + scanProgress * 0.08})`;
+    worldCtx.fillRect(containmentBoxX - 8, containmentBoxY + containmentBoxH + 8, containmentBoxW + 16, 6);
+    worldCtx.fillStyle = `rgba(255, 241, 123, ${0.05 + sourceSpecimenSettleProgress * 0.08})`;
+    worldCtx.fillRect(containmentBoxX, containmentBoxY + containmentBoxH + 11, containmentBoxW, 1);
+
+    if (scene.sourceSpecimen) {
+      drawExtinctionSpecimen(
+        worldCtx,
+        scene.sourceSpecimen,
+        sourceSpecimenX,
+        sourceSpecimenY,
+        sourceSpecimenScale,
+        sourceSpecimenHeading,
+        sourceSpecimenAlpha,
+        sourceSpecimenCurl,
+        sourceSpecimenCoilProgress
+      );
+    }
+
+    drawSpecimenHeadScanPanel(
+      worldCtx,
+      scene.sourceSpecimen,
+      scene.sourceBrain,
+      specimenX,
+      specimenY,
+      specimenW,
+      specimenH,
+      specimenHeadScanProgress,
+      scene.frame,
+      sourceSpecimenHeadX,
+      sourceSpecimenHeadY
+    );
+
+    drawBrainBlueprint(worldCtx, scene.sourceBrain, winnerX, winnerY, winnerW, winnerH, {
+      alpha: 0.18 + winnerBrainActivation * 0.5,
+      fluxAmount: winnerBrainActivation * (0.12 + flashPulse * 0.05),
+      fluxPacketBudget: Math.round(8 * winnerBrainActivation),
+      nodePulseBudget: Math.round(4 * winnerBrainActivation),
+      fluxSpeedScale: 0.22,
+      fluxSelectorSpeed: 0.12,
+      nodePulseSpeed: 0.06,
+      nodePulseSelectorSpeed: 0.14,
+      fluxPhase: 0.07,
+      time: scene.frame
+    });
+
+    if (winnerBrainActivation < 0.99) {
+      worldCtx.fillStyle = "rgba(4, 12, 20, 0.44)";
+      worldCtx.fillRect(winnerX, winnerY, winnerW, winnerH);
+      worldCtx.font = "11px Courier New";
+      worldCtx.fillStyle = "rgba(221, 250, 255, 0.68)";
+      worldCtx.textAlign = "center";
+      worldCtx.fillText("NEURAL MAP HELD STATIC", winnerCenterX, winnerY + winnerH * 0.48);
+      worldCtx.textAlign = "left";
+    }
+  }
+
+  const forgeGradient = worldCtx.createLinearGradient(forgeX, forgeY - 18, forgeX, forgeY + forgeH + 18);
+  forgeGradient.addColorStop(0, "rgba(10, 20, 32, 0.92)");
+  forgeGradient.addColorStop(1, "rgba(6, 14, 24, 0.9)");
+  worldCtx.fillStyle = forgeGradient;
+  worldCtx.fillRect(forgeX - 14, forgeY - 18, forgeW + 28, forgeH + 36);
+  worldCtx.shadowBlur = 5 + (activePlan ? activePlanState.buildProgress * 5 : forgePulse * 3);
+  worldCtx.shadowColor = activePlan
+    ? activePlan.inherited
+      ? `rgba(255, 241, 123, ${0.14 + activePlanState.buildProgress * 0.22})`
+      : `rgba(102, 220, 255, ${0.12 + activePlanState.buildProgress * 0.22})`
+    : `rgba(102, 220, 255, ${0.08 + forgePulse * 0.1})`;
+  worldCtx.strokeStyle = activePlan
+    ? activePlan.inherited
+      ? `rgba(255, 241, 123, ${0.18 + activePlanState.buildProgress * 0.36})`
+      : `rgba(102, 220, 255, ${0.18 + activePlanState.buildProgress * 0.3})`
+    : "rgba(102, 220, 255, 0.18)";
+  worldCtx.lineWidth = 2;
+  worldCtx.strokeRect(forgeX - 10, forgeY - 14, forgeW + 20, forgeH + 28);
+  worldCtx.shadowBlur = 0;
+  worldCtx.fillStyle = `rgba(102, 220, 255, ${0.08 + forgePulse * 0.08})`;
+  worldCtx.fillRect(forgeX - 8, forgeY - 12, forgeW + 16, 4);
+  worldCtx.font = "11px Courier New";
+  worldCtx.fillStyle = activePlan
+    ? activePlan.inherited
+      ? "#fff17b"
+      : "#8ed7ff"
+    : "#8bbfca";
+  worldCtx.textAlign = "center";
+  worldCtx.fillText(
+    activePlan ? "SYNTHESIS CHAMBER ACTIVE" : "SYNTHESIS CHAMBER STANDBY",
+    forgeCenterX,
+    forgeY - 24
+  );
+  worldCtx.textAlign = "left";
+
+  if (activePlan) {
+    if (activePlan.inherited && scene.sourceBrain && activePlanState.buildProgress > 0) {
+      const linkStartX = winnerX + winnerW + 14;
+      const linkStartY = winnerY + winnerH * 0.48;
+      const linkEndX = forgeX - 18;
+      const linkEndY = forgeY + forgeH * 0.34;
+      const linkControlX = lerp(linkStartX, linkEndX, 0.54);
+      const linkControlY = Math.min(linkStartY, linkEndY) - 28;
+
+      worldCtx.save();
+      worldCtx.globalCompositeOperation = "lighter";
+      worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.12 + activePlanState.buildProgress * 0.34})`;
+      worldCtx.lineWidth = 1 + activePlanState.buildProgress * 1.4;
+      worldCtx.setLineDash([5, 4]);
+      worldCtx.beginPath();
+      worldCtx.moveTo(linkStartX, linkStartY);
+      worldCtx.quadraticCurveTo(linkControlX, linkControlY, linkEndX, linkEndY);
+      worldCtx.stroke();
+      worldCtx.setLineDash([]);
+
+      for (let packet = 0; packet < 4; packet += 1) {
+        const packetT = clamp(activePlanState.buildProgress * 1.12 - packet * 0.17, 0, 1);
+        const packetX =
+          (1 - packetT) * (1 - packetT) * linkStartX +
+          2 * (1 - packetT) * packetT * linkControlX +
+          packetT * packetT * linkEndX;
+        const packetY =
+          (1 - packetT) * (1 - packetT) * linkStartY +
+          2 * (1 - packetT) * packetT * linkControlY +
+          packetT * packetT * linkEndY;
+        worldCtx.fillStyle = `rgba(255, 241, 123, ${0.22 + activePlanState.buildProgress * 0.32})`;
+        worldCtx.fillRect(Math.round(packetX) - 2, Math.round(packetY) - 2, 4, 4);
+      }
+      worldCtx.restore();
+    }
+
+    worldCtx.save();
+    worldCtx.globalCompositeOperation = "lighter";
+    const laneCount = 5;
+    for (let lane = 0; lane < laneCount; lane += 1) {
+      const laneT = laneCount === 1 ? 0.5 : lane / (laneCount - 1);
+      const laneX = forgeX + 40 + (forgeW - 80) * laneT + Math.sin(scene.frame * 0.03 + lane * 0.8) * 1.4;
+      const streamY = forgeY + 18 + ((scene.frame * (0.48 + lane * 0.025) + lane * 20) % (forgeH - 34));
+      worldCtx.fillStyle = lane % 2 === 0
+        ? `rgba(74, 255, 212, ${0.04 + chamberFlux * 0.08})`
+        : `rgba(255, 109, 179, ${0.04 + chamberFlux * 0.07})`;
+      worldCtx.fillRect(Math.round(laneX), Math.round(streamY), 2, 6);
+      worldCtx.fillRect(Math.round(laneX) - 1, Math.round(streamY) + 2, 4, 1);
+    }
+    worldCtx.restore();
+
+    if (activePlan.inherited && scene.sourceBrain) {
+      const stitchSourceW = 144;
+      const stitchTargetW = 188;
+      const stitchH = 106;
+      const stitchSourceX = forgeX + 26;
+      const stitchTargetX = forgeX + forgeW - stitchTargetW - 26;
+      const stitchY = forgeY + 34;
+      const ledgerTop = forgeY + forgeH - 64;
+
+      worldCtx.font = "8px Courier New";
+      worldCtx.textAlign = "center";
+      worldCtx.fillStyle = "rgba(255, 241, 123, 0.84)";
+      worldCtx.fillText("SOURCE", stitchSourceX + stitchSourceW * 0.5, stitchY - 8);
+      worldCtx.fillStyle = "rgba(157, 231, 255, 0.86)";
+      worldCtx.fillText("DESCENDANT", stitchTargetX + stitchTargetW * 0.5, stitchY - 8);
+      worldCtx.textAlign = "left";
+
+      drawBrainBlueprint(worldCtx, scene.sourceBrain, stitchSourceX, stitchY, stitchSourceW, stitchH, {
+        alpha: 0.44 + activePlanState.mutationProgress * 0.24,
+        fluxAmount: 0.1 + chamberFlux * 0.12,
+        fluxPacketBudget: 5,
+        nodePulseBudget: 3,
+        fluxSpeedScale: 0.24,
+        fluxSelectorSpeed: 0.13,
+        nodePulseSpeed: 0.06,
+        nodePulseSelectorSpeed: 0.15,
+        fluxPhase: 0.04,
+        time: scene.frame
+      });
+
+      drawBrainBlueprint(worldCtx, activePlan.brain, stitchTargetX, stitchY, stitchTargetW, stitchH, {
+        alpha: 0.28 + activePlanState.buildProgress * 0.72,
+        baseBrain: scene.sourceBrain,
+        mix: activePlanState.mutationProgress,
+        mutationSummary: activePlan.mutationSummary,
+        mutationGlow: activePlanState.mutationProgress * (0.65 + flashPulse * 0.35),
+        fluxAmount: chamberFlux * 0.52,
+        fluxPacketBudget: 7,
+        nodePulseBudget: 4,
+        fluxSpeedScale: 0.26,
+        fluxSelectorSpeed: 0.14,
+        nodePulseSpeed: 0.07,
+        nodePulseSelectorSpeed: 0.16,
+        fluxPhase: activePlanIndex * 0.17,
+        time: scene.frame
+      });
+
+      drawBrainStitching(
+        worldCtx,
+        activePlan.mutationSummary,
+        stitchSourceX,
+        stitchY,
+        stitchSourceW,
+        stitchH,
+        stitchTargetX,
+        stitchY,
+        stitchTargetW,
+        stitchH,
+        activePlanState.mutationProgress * (0.7 + flashPulse * 0.3),
+        scene.frame
+      );
+
+      drawMutationTelemetry(
+        worldCtx,
+        activePlan.mutationSummary,
+        forgeCenterX,
+        forgeY - 38,
+        activePlanState.mutationProgress * (0.74 + flashPulse * 0.26)
+      );
+
+      drawBrainStitchLedger(
+        worldCtx,
+        activePlan.mutationSummary,
+        forgeCenterX,
+        ledgerTop,
+        forgeW - 20,
+        activePlanState.mutationProgress * (0.76 + flashPulse * 0.24)
+      );
+    } else {
+      drawRandomBrainGenesis(
+        worldCtx,
+        activePlan.brain,
+        forgeX + 18,
+        forgeY + 14,
+        forgeW - 36,
+        forgeH - 28,
+        activePlanState.buildProgress,
+        activePlanState.packageProgress,
+        scene.frame
+      );
+
+      drawBrainBlueprint(worldCtx, activePlan.brain, forgeX + 18, forgeY + 14, forgeW - 36, forgeH - 28, {
+        alpha: 0.1 + activePlanState.buildProgress * 0.76,
+        baseBrain: null,
+        mix: clamp(activePlanState.buildProgress * 1.16, 0, 1),
+        mutationSummary: null,
+        mutationGlow: 0,
+        fluxAmount: chamberFlux * 0.5,
+        fluxPacketBudget: 8,
+        nodePulseBudget: 5,
+        fluxSpeedScale: 0.3,
+        fluxSelectorSpeed: 0.16,
+        nodePulseSpeed: 0.08,
+        nodePulseSelectorSpeed: 0.18,
+        fluxPhase: activePlanIndex * 0.17 + 0.33,
+        time: scene.frame
+      });
+    }
+
+    worldCtx.save();
+    worldCtx.globalCompositeOperation = "lighter";
+    for (let spark = 0; spark < 5; spark += 1) {
+      const angle = scene.frame * 0.045 + spark * (TAU / 5);
+      const radius = 26 + activePlanState.buildProgress * 10 + (spark % 3) * 4;
+      const sparkX = forgeCenterX + Math.cos(angle) * radius;
+      const sparkY = forgeY + forgeH * 0.45 + Math.sin(angle) * (12 + activePlanState.buildProgress * 6);
+      worldCtx.fillStyle = spark % 2 === 0
+        ? `rgba(255, 109, 179, ${0.08 + activePlanState.buildProgress * 0.1 + flashPulse * 0.03})`
+        : `rgba(74, 255, 212, ${0.08 + activePlanState.buildProgress * 0.1 + forgePulse * 0.03})`;
+      worldCtx.fillRect(Math.round(sparkX) - 1, Math.round(sparkY) - 1, 2, 2);
+    }
+    worldCtx.restore();
+  } else {
+    worldCtx.font = "12px Courier New";
+    worldCtx.fillStyle = "#8bbfca";
+    worldCtx.textAlign = "center";
+    worldCtx.fillText(
+      scene.frame < scanFrames ? "SCAN LOCK IN PROGRESS" : "NEXT LINEAGE BUFFERED",
+      forgeCenterX,
+      forgeY + forgeH * 0.5
+    );
+    worldCtx.textAlign = "left";
+  }
+
+  for (let i = 0; i < scene.plans.length; i += 1) {
+    const plan = scene.plans[i];
+    const position = plan.position;
+    const generationSlot = scene.generationSlotByPlanIndex[i];
+    const slotTiming = scene.slotTimings[generationSlot];
+    const planState = getExtinctionPlanProgress(scene, slotTiming, plan);
+    const isActive = generationSlot === activeIndex;
+    drawIncubationEgg(
+      worldCtx,
+      plan,
+      planState,
+      position.x,
+      position.y,
+      isActive,
+      flashPulse,
+      String(generationSlot + 1).padStart(2, "0")
+    );
+
+    if (isActive && (planState.packageProgress > 0 || planState.cubeTravelProgress > 0 || planState.implantProgress > 0)) {
+      const beamStartX = forgeCenterX;
+      const beamStartY = forgeY + forgeH + 8;
+      const beamTargetX = position.x;
+      const beamTargetY = position.y + 16;
+      const accent = plan.inherited ? "255, 241, 123" : "102, 220, 255";
+      const packagePulse = 0.5 + Math.sin(scene.frame * 0.14 + generationSlot * 0.8) * 0.5;
+      const cubeX = planState.cubeTravelProgress > 0
+        ? lerp(beamStartX, beamTargetX, planState.cubeTravelProgress)
+        : beamStartX;
+      const cubeY = planState.cubeTravelProgress > 0
+        ? lerp(beamStartY, beamTargetY, planState.cubeTravelProgress)
+        : beamStartY;
+
+      worldCtx.save();
+      worldCtx.globalCompositeOperation = "lighter";
+      if (planState.cubeTravelProgress > 0 || planState.implantProgress > 0) {
+        worldCtx.strokeStyle = `rgba(${accent}, ${0.16 + planState.transferProgress * 0.28})`;
+        worldCtx.lineWidth = 1 + planState.transferProgress * 0.9;
+        worldCtx.shadowBlur = 0;
+        worldCtx.beginPath();
+        worldCtx.moveTo(beamStartX, beamStartY);
+        worldCtx.lineTo(beamTargetX, beamTargetY);
+        worldCtx.stroke();
+
+        const packetX = lerp(beamStartX, beamTargetX, planState.cubeTravelProgress);
+        const packetY = lerp(beamStartY, beamTargetY, planState.cubeTravelProgress);
+        worldCtx.fillStyle = `rgba(${accent}, ${0.16 + planState.transferProgress * 0.18})`;
+        worldCtx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+      }
+
+      if (planState.packageProgress > 0 && planState.cubeTravelProgress <= 0.01) {
+        const braceSize = 18 - planState.packageProgress * 6;
+        worldCtx.strokeStyle = `rgba(${accent}, ${0.16 + planState.packageProgress * 0.26})`;
+        worldCtx.lineWidth = 1;
+        worldCtx.strokeRect(
+          beamStartX - braceSize * 0.5,
+          beamStartY - braceSize * 0.5,
+          braceSize,
+          braceSize
+        );
+        drawBrainDataCube(
+          worldCtx,
+          beamStartX,
+          beamStartY,
+          accent,
+          0.46 + planState.packageProgress * 0.4,
+          0.74 + planState.packageProgress * 0.34,
+          packagePulse
+        );
+      }
+
+      if (planState.cubeTravelProgress > 0) {
+        drawBrainDataCube(
+          worldCtx,
+          cubeX,
+          cubeY,
+          accent,
+          0.58 + planState.transferProgress * 0.32,
+          1,
+          packagePulse
+        );
+      }
+
+      if (planState.implantProgress > 0) {
+        drawBrainDataCube(
+          worldCtx,
+          beamTargetX,
+          beamTargetY,
+          accent,
+          0.44 + (1 - planState.implantProgress) * 0.22,
+          1 - planState.implantProgress * 0.45,
+          packagePulse
+        );
+      }
+      worldCtx.restore();
+    }
+  }
+
+  worldCtx.restore();
+}
+
+function drawBackground() {
+  worldCtx.fillStyle = "#041018";
+  worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  for (let y = 0; y < HEIGHT; y += 16) {
+    worldCtx.fillStyle = y % 32 === 0 ? "rgba(102, 220, 255, 0.045)" : "rgba(102, 220, 255, 0.018)";
+    worldCtx.fillRect(0, y, WIDTH, 1);
+  }
+
+  for (let x = 0; x < WIDTH; x += 16) {
+    worldCtx.fillStyle = x % 32 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    worldCtx.fillRect(x, 0, 1, HEIGHT);
+  }
+
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.35)";
+  worldCtx.lineWidth = 4;
+  worldCtx.strokeRect(2, 2, WIDTH - 4, HEIGHT - 4);
+
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.12)";
+  worldCtx.lineWidth = 1;
+  worldCtx.strokeRect(10, 10, WIDTH - 20, HEIGHT - 20);
+}
+
+function drawFood() {
+  for (let i = 0; i < state.foods.length; i += 1) {
+    const food = state.foods[i];
+    const pulse = 1 + Math.sin(state.tick * 0.08 + food.pulse) * 0.18;
+    const size = Math.max(3, Math.round(food.radius * pulse));
+    const x = Math.round(food.x);
+    const y = Math.round(food.y);
+
+    worldCtx.fillStyle = "#183826";
+    worldCtx.fillRect(x - size - 1, y - 1, size * 2 + 2, 2);
+    worldCtx.fillRect(x - 1, y - size - 1, 2, size * 2 + 2);
+
+    worldCtx.fillStyle = "#80ff88";
+    worldCtx.fillRect(x - size, y - 1, size * 2, 2);
+    worldCtx.fillRect(x - 1, y - size, 2, size * 2);
+    worldCtx.fillRect(x - 1, y - 1, 2, 2);
+  }
+}
+
+function drawEyeCone(creature, eye, color) {
+  const halfFov = CONFIG.eyeFov * 0.5;
+  const originX = eye.origin?.x ?? creature.x;
+  const originY = eye.origin?.y ?? creature.y;
+
+  worldCtx.beginPath();
+  worldCtx.moveTo(originX, originY);
+  worldCtx.arc(originX, originY, CONFIG.eyeRange, eye.angle - halfFov, eye.angle + halfFov);
+  worldCtx.closePath();
+  worldCtx.fillStyle = color;
+  worldCtx.fill();
+
+  const segments = [
+    { signal: eye.food, color: "rgba(128, 255, 136, 0.75)" },
+    { signal: eye.creature, color: "rgba(255, 180, 71, 0.72)" },
+    { signal: eye.wall, color: "rgba(102, 220, 255, 0.75)" }
+  ];
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
+    if (!segment.signal.point) {
+      continue;
+    }
+    worldCtx.strokeStyle = segment.color;
+    worldCtx.lineWidth = 1;
+    worldCtx.beginPath();
+    worldCtx.moveTo(originX, originY);
+    worldCtx.lineTo(segment.signal.point.x, segment.signal.point.y);
+    worldCtx.stroke();
+  }
+}
+
+function getCreatureSegmentCount(creature) {
+  if (creature.lifeStage === "egg") {
+    return 0;
+  }
+
+  const adultCount = getAdultSegmentCount(creature);
+  if (creature.lifeStage === "juvenile") {
+    const growth = 1 - clamp(creature.growthTimer / CONFIG.juvenileGrowthFrames, 0, 1);
+    return clamp(
+      1 + Math.floor(growth * adultCount),
+      1,
+      Math.max(1, adultCount - 1)
+    );
+  }
+
+  return adultCount;
+}
+
+function buildSegmentedBodyLayout(creature, headLength, headHeight, lifeScale, tailAnchorLocal) {
+  ensureCreatureSegmentBodies(creature, { headLength, lifeScale, tailAnchorLocal });
+  const adultCount = getAdultSegmentCount(creature);
+  const segmentCount = getCreatureSegmentCount(creature);
+  const segments = [];
+  const bounds = {
+    minX: creature.x - Math.max(headLength, headHeight) * 0.6,
+    maxX: creature.x + Math.max(headLength, headHeight) * 0.6,
+    minY: creature.y - Math.max(headLength, headHeight) * 0.6,
+    maxY: creature.y + Math.max(headLength, headHeight) * 0.6
+  };
+
+  for (let i = 0; i < segmentCount; i += 1) {
+    const segmentState = creature.segmentBodies[i];
+    if (!segmentState) {
+      continue;
+    }
+
+    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+    const segmentScale = 1 - progress * 0.22;
+    const segmentLength = Math.max(6, Math.round(headLength * segmentScale));
+    const segmentHeight = Math.max(5, Math.round(headHeight * (1 - progress * 0.18)));
+    const radius = Math.max(4, segmentHeight * 0.44);
+
+    const segment = {
+      progress,
+      x: segmentState.x,
+      y: segmentState.y,
+      angle: segmentState.angle,
+      length: segmentLength,
+      height: segmentHeight,
+      radius
+    };
+    segments.push(segment);
+
+    const halfWidth = segment.length * 0.5;
+    const halfHeight = segment.height * 0.5;
+    const rotatedHalfWidth =
+      Math.abs(Math.cos(segment.angle)) * halfWidth +
+      Math.abs(Math.sin(segment.angle)) * halfHeight;
+    const rotatedHalfHeight =
+      Math.abs(Math.sin(segment.angle)) * halfWidth +
+      Math.abs(Math.cos(segment.angle)) * halfHeight;
+    bounds.minX = Math.min(bounds.minX, segment.x - rotatedHalfWidth - 1);
+    bounds.maxX = Math.max(bounds.maxX, segment.x + rotatedHalfWidth + 1);
+    bounds.minY = Math.min(bounds.minY, segment.y - rotatedHalfHeight - 1);
+    bounds.maxY = Math.max(bounds.maxY, segment.y + rotatedHalfHeight + 1);
+  }
+
+  return {
+    segmentCount,
+    segments,
+    bounds
+  };
+}
+
+function drawSegmentedBody(layout, creature, bodyColor, bodyShadow) {
+  for (let i = layout.segments.length - 1; i >= 0; i -= 1) {
+    const segment = layout.segments[i];
+    const innerWidth = Math.round(segment.length * 0.94);
+    const innerHeight = Math.round(segment.height * 0.88);
+    const fillWidth = Math.round(segment.length * 0.84);
+    const fillHeight = Math.round(segment.height * 0.84);
+    const segmentColor = creature.alive
+      ? `hsl(${creature.hue} 92% ${Math.round(62 - segment.progress * 10)}%)`
+      : bodyColor;
+
+    worldCtx.save();
+    worldCtx.translate(segment.x, segment.y);
+    worldCtx.rotate(segment.angle);
+
+    worldCtx.fillStyle = bodyShadow;
+    worldCtx.fillRect(
+      -Math.round(segment.length * 0.5) - 1,
+      -Math.round(segment.height * 0.5),
+      segment.length + 2,
+      segment.height
+    );
+
+    worldCtx.fillStyle = "#14283b";
+    worldCtx.fillRect(
+      -Math.round(innerWidth * 0.5),
+      -Math.round(innerHeight * 0.5),
+      innerWidth,
+      innerHeight
+    );
+
+    worldCtx.fillStyle = segmentColor;
+    worldCtx.fillRect(
+      -Math.round(fillWidth * 0.5),
+      -Math.round(fillHeight * 0.5),
+      fillWidth,
+      fillHeight
+    );
+    worldCtx.restore();
+  }
+}
+
+function drawEggCreature(creature, isFeatured) {
+  const pulse = 1 + Math.sin(creature.movePhase * 0.6) * 0.05;
+  const eggWidth = Math.round(14 * pulse);
+  const eggHeight = Math.round(18 * pulse);
+  const crackProgress = 1 - clamp(creature.eggTimer / CONFIG.eggHatchFrames, 0, 1);
+  const shellColor = `hsl(${creature.hue} 48% 84%)`;
+  const shellShadow = `hsla(${creature.hue} 60% 72% / 0.35)`;
+
+  worldCtx.fillStyle = shellShadow;
+  worldCtx.fillRect(-Math.round(eggWidth * 0.5) - 2, -Math.round(eggHeight * 0.5), eggWidth + 4, eggHeight);
+  worldCtx.fillRect(-Math.round(eggWidth * 0.35), -Math.round(eggHeight * 0.6), Math.round(eggWidth * 0.7), Math.round(eggHeight * 1.2));
+
+  worldCtx.fillStyle = shellColor;
+  worldCtx.fillRect(-Math.round(eggWidth * 0.5), -Math.round(eggHeight * 0.5), eggWidth, eggHeight);
+  worldCtx.fillRect(-Math.round(eggWidth * 0.32), -Math.round(eggHeight * 0.65), Math.round(eggWidth * 0.64), Math.round(eggHeight * 1.3));
+
+  worldCtx.fillStyle = "#f9ffff";
+  worldCtx.fillRect(-2, -Math.round(eggHeight * 0.34), 4, 3);
+
+  if (crackProgress > 0.5) {
+    worldCtx.fillStyle = "#183147";
+    worldCtx.fillRect(-1, -4, 2, 3);
+    worldCtx.fillRect(-3, -1, 2, 2);
+    worldCtx.fillRect(1, 1, 2, 2);
+  }
+}
+
+function drawCreature(creature, isFeatured) {
+  if (creature.lifeStage === "egg") {
+    worldCtx.save();
+    worldCtx.translate(creature.x, creature.y);
+    worldCtx.rotate(creature.heading);
+    drawEggCreature(creature, isFeatured);
+    worldCtx.restore();
+    return;
+  }
+
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  const deathProgress = creature.alive
+    ? 0
+    : 1 - clamp(creature.deathTimer / CONFIG.deathAnimationFrames, 0, 1);
+  const headLength = bodyMetrics.headLength;
+  const headHeight = bodyMetrics.headHeight;
+  const bodyColor = creature.alive
+    ? `hsl(${creature.hue} 92% 62%)`
+    : `hsla(${creature.hue} 28% 34% / ${0.9 - deathProgress * 0.45})`;
+  const bodyShadow = creature.alive
+    ? `hsla(${creature.hue} 95% 72% / 0.3)`
+    : `rgba(10, 18, 28, ${0.36 - deathProgress * 0.18})`;
+
+  drawSegmentedBody(bodyMetrics.segmentLayout, creature, bodyColor, bodyShadow);
+
+  worldCtx.save();
+  worldCtx.translate(creature.x, creature.y);
+  worldCtx.rotate(creature.heading);
+  if (!creature.alive) {
+    worldCtx.rotate(creature.deathSpin * deathProgress * 3.2);
+    worldCtx.globalAlpha = 1 - deathProgress * 0.45;
+  }
+
+  worldCtx.fillStyle = bodyShadow;
+  worldCtx.fillRect(
+    -Math.round(bodyMetrics.headOuterWidth * 0.5) - 1,
+    -Math.round(bodyMetrics.headOuterHeight * 0.5),
+    bodyMetrics.headOuterWidth + 2,
+    bodyMetrics.headOuterHeight
+  );
+
+  worldCtx.fillStyle = "#14283b";
+  worldCtx.fillRect(
+    -Math.round(bodyMetrics.headInnerWidth * 0.5),
+    -Math.round(bodyMetrics.headInnerHeight * 0.5),
+    bodyMetrics.headInnerWidth,
+    bodyMetrics.headInnerHeight
+  );
+
+  worldCtx.fillStyle = bodyColor;
+  worldCtx.fillRect(
+    -Math.round(bodyMetrics.headFillWidth * 0.5),
+    -Math.round(bodyMetrics.headFillHeight * 0.5),
+    bodyMetrics.headFillWidth,
+    bodyMetrics.headFillHeight
+  );
+
+  worldCtx.fillStyle = creature.alive
+    ? `hsla(${creature.hue} 100% 82% / 0.28)`
+    : `rgba(255, 170, 196, ${0.16 - deathProgress * 0.08})`;
+  worldCtx.fillRect(
+    Math.round(headLength * 0.06),
+    -Math.max(2, Math.round(headHeight * 0.28)),
+    Math.max(3, Math.round(headLength * 0.2)),
+    Math.max(3, Math.round(headHeight * 0.52))
+  );
+
+  worldCtx.fillStyle = "#031117";
+  worldCtx.fillRect(bodyMetrics.leftEyeLocal.x, bodyMetrics.leftEyeLocal.y, 3, 3);
+  worldCtx.fillRect(bodyMetrics.rightEyeLocal.x, bodyMetrics.rightEyeLocal.y, 3, 3);
+  worldCtx.fillStyle = "#dffcff";
+  worldCtx.fillRect(bodyMetrics.leftEyeLocal.x + 1, bodyMetrics.leftEyeLocal.y + 1, 1, 1);
+  worldCtx.fillRect(bodyMetrics.rightEyeLocal.x + 1, bodyMetrics.rightEyeLocal.y + 1, 1, 1);
+
+  worldCtx.fillStyle = creature.alive ? "#1c394f" : "#4b2838";
+  worldCtx.fillRect(bodyMetrics.mouthLocal.x, -1, 3, 2);
+  worldCtx.restore();
+
+  if (!creature.alive) {
+    const headExtent = Math.max(bodyMetrics.headOuterWidth, bodyMetrics.headOuterHeight) * 0.65;
+    const minX = Math.min(bodyMetrics.segmentLayout.bounds.minX, creature.x - headExtent);
+    const maxX = Math.max(bodyMetrics.segmentLayout.bounds.maxX, creature.x + headExtent);
+    const minY = Math.min(bodyMetrics.segmentLayout.bounds.minY, creature.y - headExtent);
+    const maxY = Math.max(bodyMetrics.segmentLayout.bounds.maxY, creature.y + headExtent);
+
+    worldCtx.strokeStyle = `rgba(255, 109, 179, ${0.45 - deathProgress * 0.2})`;
+    worldCtx.lineWidth = 1;
+    worldCtx.strokeRect(
+      Math.floor(minX) - 4,
+      Math.floor(minY) - 3,
+      Math.ceil(maxX - minX) + 8,
+      Math.ceil(maxY - minY) + 6
+    );
+    for (let i = 0; i < 4; i += 1) {
+      const shardX = creature.x - 6 + i * 4;
+      const shardY = creature.y - 8 + deathProgress * 12 + Math.sin(creature.movePhase + i) * 2;
+      worldCtx.fillStyle = `rgba(255, 109, 179, ${0.6 - deathProgress * 0.35})`;
+      worldCtx.fillRect(Math.round(shardX), Math.round(shardY), 2, 2);
+    }
+  }
+}
+
+function drawCreatures() {
+  if (state.featured && state.featured.senses) {
+    drawEyeCone(state.featured, state.featured.senses.eyes[0], "rgba(102, 220, 255, 0.05)");
+    drawEyeCone(state.featured, state.featured.senses.eyes[1], "rgba(102, 220, 255, 0.05)");
+  }
+
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    drawCreature(state.creatures[i], state.creatures[i] === state.featured);
+  }
+}
+
+function drawSparks() {
+  for (let i = 0; i < state.sparks.length; i += 1) {
+    const spark = state.sparks[i];
+    const alpha = spark.life / spark.maxLife;
+    worldCtx.fillStyle = hexToRgba(spark.color, alpha);
+    worldCtx.fillRect(Math.round(spark.x), Math.round(spark.y), 2, 2);
+  }
+}
+
+function drawWorldHud() {
+  const textLines = [
+    `TICK ${state.tick.toString().padStart(5, "0")}`,
+    `BEST EVER ${formatAge(state.bestEverAge)}`,
+    state.featured
+      ? `FOCUS C-${String(state.featured.id).padStart(3, "0")} ${state.featured.recentAction}`
+      : "FOCUS NONE"
+  ];
+
+  worldCtx.fillStyle = "rgba(2, 8, 13, 0.72)";
+  worldCtx.fillRect(16, 16, 224, 62);
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.18)";
+  worldCtx.strokeRect(16.5, 16.5, 223, 61);
+
+  worldCtx.font = "14px Courier New";
+  worldCtx.fillStyle = "#ddfaff";
+  for (let i = 0; i < textLines.length; i += 1) {
+    worldCtx.fillText(textLines[i], 28, 36 + i * 18);
+  }
+}
+
+function drawStartupScene() {
+  const scene = state.startupScene;
+  if (!scene) {
+    return;
+  }
+
+  const progress = clamp(scene.frame / Math.max(1, scene.totalFrames), 0, 1);
+  const fadeIn = clamp(progress / 0.08, 0, 1);
+  const fadeOut = 1 - clamp((progress - 0.9) / 0.1, 0, 1);
+  const overlayStrength = fadeIn * fadeOut;
+  const habitatScanProgress = clamp((progress - 0.1) / 0.26, 0, 1);
+  const populationLockProgress = clamp((progress - 0.36) / 0.22, 0, 1);
+  const foodLockProgress = clamp((progress - 0.52) / 0.18, 0, 1);
+  const releaseProgress = clamp((progress - 0.74) / 0.18, 0, 1);
+  const readyProgress = clamp((progress - 0.9) / 0.1, 0, 1);
+  const chamberX = WIDTH * 0.08;
+  const chamberY = HEIGHT * 0.09;
+  const chamberW = WIDTH * 0.84;
+  const chamberH = HEIGHT * 0.78;
+  const scanX = chamberX + 20 + (chamberW - 40) * habitatScanProgress;
+  const pulse = 0.5 + Math.sin(scene.frame * 0.11) * 0.5;
+  const stageLabel = readyProgress > 0
+    ? "LINEAGE RELEASE READY"
+    : releaseProgress > 0
+      ? "UNSEALING HABITAT GATE"
+      : foodLockProgress > 0
+        ? "LOCKING FOOD PATCHES"
+        : populationLockProgress > 0
+          ? "INDEXING BIOSIGNATURES"
+          : "POWERING RETRO HABITAT";
+
+  worldCtx.save();
+  const overlayGradient = worldCtx.createLinearGradient(0, 0, 0, HEIGHT);
+  overlayGradient.addColorStop(0, `rgba(1, 7, 12, ${0.82 * overlayStrength})`);
+  overlayGradient.addColorStop(0.55, `rgba(2, 10, 18, ${0.72 * overlayStrength})`);
+  overlayGradient.addColorStop(1, `rgba(0, 5, 8, ${0.88 * overlayStrength})`);
+  worldCtx.fillStyle = overlayGradient;
+  worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  worldCtx.globalCompositeOperation = "lighter";
+  const sweepGradient = worldCtx.createLinearGradient(scanX - 44, chamberY, scanX + 44, chamberY);
+  sweepGradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+  sweepGradient.addColorStop(0.48, `rgba(102, 220, 255, ${0.04 + overlayStrength * 0.08})`);
+  sweepGradient.addColorStop(0.5, `rgba(255, 241, 123, ${0.08 + overlayStrength * 0.08})`);
+  sweepGradient.addColorStop(0.52, `rgba(102, 220, 255, ${0.04 + overlayStrength * 0.08})`);
+  sweepGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+  worldCtx.fillStyle = sweepGradient;
+  worldCtx.fillRect(scanX - 44, chamberY + 12, 88, chamberH - 24);
+  worldCtx.globalCompositeOperation = "source-over";
+
+  worldCtx.fillStyle = `rgba(3, 12, 18, ${0.82 * overlayStrength})`;
+  worldCtx.fillRect(chamberX, chamberY, chamberW, chamberH);
+  worldCtx.strokeStyle = `rgba(102, 220, 255, ${0.2 + overlayStrength * 0.26})`;
+  worldCtx.lineWidth = 2;
+  worldCtx.strokeRect(chamberX, chamberY, chamberW, chamberH);
+
+  for (let y = chamberY + 8; y < chamberY + chamberH - 8; y += 14) {
+    worldCtx.fillStyle = y % 28 === 0
+      ? `rgba(102, 220, 255, ${0.02 + overlayStrength * 0.03})`
+      : `rgba(102, 220, 255, ${0.008 + overlayStrength * 0.016})`;
+    worldCtx.fillRect(chamberX + 4, y, chamberW - 8, 1);
+  }
+
+  worldCtx.fillStyle = "#ddfaff";
+  worldCtx.font = "18px Courier New";
+  worldCtx.fillText("HABITAT BOOT SEQUENCE", chamberX + 20, chamberY + 28);
+  worldCtx.font = "12px Courier New";
+  worldCtx.fillStyle = `rgba(157, 231, 255, ${0.7 + overlayStrength * 0.18})`;
+  worldCtx.fillText(stageLabel, chamberX + 20, chamberY + 48);
+  worldCtx.fillText("GENE LAB // CLOSED ECOSYSTEM // PIXEL BIOSPHERE", chamberX + 20, chamberY + 64);
+
+  worldCtx.fillStyle = `rgba(74, 255, 212, ${0.16 + overlayStrength * 0.22})`;
+  worldCtx.fillRect(chamberX + 20, chamberY + 78, chamberW - 40, 3);
+  worldCtx.fillStyle = `rgba(255, 241, 123, ${0.42 + overlayStrength * 0.28})`;
+  worldCtx.fillRect(chamberX + 20, chamberY + 78, (chamberW - 40) * progress, 3);
+
+  const leftPanelX = chamberX + 20;
+  const rightPanelX = chamberX + chamberW - 186;
+  const panelY = chamberY + 98;
+  const panelW = 166;
+  const panelH = 84;
+
+  worldCtx.fillStyle = `rgba(5, 15, 24, ${0.78 * overlayStrength})`;
+  worldCtx.fillRect(leftPanelX, panelY, panelW, panelH);
+  worldCtx.fillRect(rightPanelX, panelY, panelW, panelH);
+  worldCtx.strokeStyle = `rgba(102, 220, 255, ${0.14 + overlayStrength * 0.18})`;
+  worldCtx.strokeRect(leftPanelX, panelY, panelW, panelH);
+  worldCtx.strokeRect(rightPanelX, panelY, panelW, panelH);
+
+  worldCtx.font = "11px Courier New";
+  worldCtx.fillStyle = "#fff17b";
+  worldCtx.fillText("BOOT READOUT", leftPanelX + 10, panelY + 16);
+  worldCtx.fillText("SEED TARGETS", rightPanelX + 10, panelY + 16);
+  worldCtx.fillStyle = "#ddfaff";
+  worldCtx.fillText(`POWER ${Math.round((0.2 + habitatScanProgress * 0.8) * 100)}%`, leftPanelX + 10, panelY + 34);
+  worldCtx.fillText(`GRID ${Math.round(habitatScanProgress * 100)}%`, leftPanelX + 10, panelY + 50);
+  worldCtx.fillText(`BIOSCAN ${Math.round(populationLockProgress * 100)}%`, leftPanelX + 10, panelY + 66);
+  worldCtx.fillText(`RELEASE ${Math.round(releaseProgress * 100)}%`, leftPanelX + 10, panelY + 82);
+  worldCtx.fillText(`CREATURES ${String(scene.creatureTarget).padStart(2, "0")}`, rightPanelX + 10, panelY + 34);
+  worldCtx.fillText(`FOOD ${String(scene.foodTarget).padStart(2, "0")}`, rightPanelX + 10, panelY + 50);
+  worldCtx.fillText(`MEMORY NODES ${String(CONFIG.memoryNeuronCount).padStart(2, "0")}`, rightPanelX + 10, panelY + 66);
+  worldCtx.fillText("STATUS READY TO UNSEAL", rightPanelX + 10, panelY + 82);
+
+  const centerY = chamberY + chamberH * 0.58;
+  worldCtx.strokeStyle = `rgba(102, 220, 255, ${0.08 + overlayStrength * 0.2})`;
+  worldCtx.strokeRect(WIDTH * 0.5 - 68, centerY - 48, 136, 96);
+  worldCtx.beginPath();
+  worldCtx.moveTo(WIDTH * 0.5 - 82, centerY);
+  worldCtx.lineTo(WIDTH * 0.5 + 82, centerY);
+  worldCtx.moveTo(WIDTH * 0.5, centerY - 62);
+  worldCtx.lineTo(WIDTH * 0.5, centerY + 62);
+  worldCtx.stroke();
+
+  const lockedCreatures = Math.floor(state.creatures.length * populationLockProgress);
+  for (let i = 0; i < lockedCreatures; i += 1) {
+    const creature = state.creatures[i];
+    const size = 12 + Math.sin(scene.frame * 0.16 + i * 0.9) * 2;
+    worldCtx.strokeStyle = `rgba(102, 220, 255, ${0.12 + overlayStrength * 0.2 + pulse * 0.08})`;
+    worldCtx.strokeRect(
+      Math.round(creature.x - size * 0.5),
+      Math.round(creature.y - size * 0.5),
+      Math.round(size),
+      Math.round(size)
+    );
+    worldCtx.fillStyle = `rgba(255, 241, 123, ${0.18 + overlayStrength * 0.24})`;
+    worldCtx.fillRect(Math.round(creature.x) - 1, Math.round(creature.y) - 1, 3, 3);
+  }
+
+  const lockedFood = Math.floor(state.foods.length * foodLockProgress);
+  for (let i = 0; i < lockedFood; i += 1) {
+    const food = state.foods[i];
+    worldCtx.strokeStyle = `rgba(128, 255, 136, ${0.18 + overlayStrength * 0.22})`;
+    worldCtx.strokeRect(Math.round(food.x) - 5, Math.round(food.y) - 5, 10, 10);
+    worldCtx.fillStyle = `rgba(128, 255, 136, ${0.24 + overlayStrength * 0.24})`;
+    worldCtx.fillRect(Math.round(food.x) - 1, Math.round(food.y) - 1, 3, 3);
+  }
+
+  if (releaseProgress > 0.02) {
+    const gateWidth = Math.max(0, (1 - releaseProgress) * 86);
+    worldCtx.fillStyle = `rgba(255, 241, 123, ${0.1 + releaseProgress * 0.16})`;
+    worldCtx.fillRect(WIDTH * 0.5 - gateWidth - 6, chamberY + 200, gateWidth, chamberH - 220);
+    worldCtx.fillRect(WIDTH * 0.5 + 6, chamberY + 200, gateWidth, chamberH - 220);
+  }
+
+  if (readyProgress > 0) {
+    worldCtx.globalCompositeOperation = "lighter";
+    worldCtx.fillStyle = `rgba(74, 255, 212, ${0.08 + readyProgress * 0.16})`;
+    worldCtx.fillRect(chamberX + 10, chamberY + 10, chamberW - 20, chamberH - 20);
+    worldCtx.globalCompositeOperation = "source-over";
+  }
+
+  worldCtx.restore();
+}
+
+function drawWorld() {
+  drawBackground();
+  drawFood();
+  drawExtinctionScene();
+  drawCreatures();
+  drawSparks();
+  drawWorldHud();
+  drawStartupScene();
+}
+
+function drawTelemetryBackground() {
+  telemetryCtx.clearRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
+  telemetryCtx.fillStyle = "#051019";
+  telemetryCtx.fillRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
+
+  for (let y = 0; y < telemetryCanvas.height; y += 14) {
+    telemetryCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    telemetryCtx.fillRect(0, y, telemetryCanvas.width, 1);
+  }
+
+  for (let x = 0; x < telemetryCanvas.width; x += 18) {
+    telemetryCtx.fillStyle = x % 36 === 0 ? "rgba(102, 220, 255, 0.028)" : "rgba(102, 220, 255, 0.012)";
+    telemetryCtx.fillRect(x, 0, 1, telemetryCanvas.height);
+  }
+
+  const sweepX = (state.tick * 1.6) % (telemetryCanvas.width + 64) - 32;
+  telemetryCtx.save();
+  telemetryCtx.globalCompositeOperation = "lighter";
+  const sweep = telemetryCtx.createLinearGradient(sweepX - 24, 0, sweepX + 24, 0);
+  sweep.addColorStop(0, "rgba(0, 0, 0, 0)");
+  sweep.addColorStop(0.5, "rgba(102, 220, 255, 0.045)");
+  sweep.addColorStop(1, "rgba(0, 0, 0, 0)");
+  telemetryCtx.fillStyle = sweep;
+  telemetryCtx.fillRect(sweepX - 24, 0, 48, telemetryCanvas.height);
+  telemetryCtx.restore();
+}
+
+function drawTelemetrySeries(metric, samples, x, y, width, height, index) {
+  const latest = samples.length > 0 ? samples[samples.length - 1][metric.key] : 0;
+  const maxValue = Math.max(1, metric.maxValue(samples));
+  const graphX = x + 12;
+  const graphY = y + 36;
+  const graphW = width - 24;
+  const graphH = height - 52;
+  const tint = hexToRgba(metric.color, 0.08);
+  const lineColor = metric.color;
+
+  telemetryCtx.fillStyle = index % 2 === 0 ? "rgba(8, 18, 29, 0.84)" : "rgba(6, 14, 23, 0.82)";
+  telemetryCtx.fillRect(x, y, width, height);
+  telemetryCtx.fillStyle = tint;
+  telemetryCtx.fillRect(x + 1, y + 1, width - 2, height - 2);
+  telemetryCtx.strokeStyle = "rgba(102, 220, 255, 0.16)";
+  telemetryCtx.lineWidth = 1;
+  telemetryCtx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+
+  telemetryCtx.fillStyle = lineColor;
+  telemetryCtx.fillRect(x + 1, y + 1, 4, height - 2);
+
+  telemetryCtx.font = "15px Courier New";
+  telemetryCtx.textAlign = "left";
+  telemetryCtx.fillStyle = "#ddfaff";
+  telemetryCtx.fillText(metric.label, x + 14, y + 18);
+  telemetryCtx.textAlign = "right";
+  telemetryCtx.fillStyle = lineColor;
+  telemetryCtx.fillText(metric.formatValue(latest), x + width - 14, y + 18);
+  telemetryCtx.font = "10px Courier New";
+  telemetryCtx.fillStyle = "rgba(221, 250, 255, 0.6)";
+  telemetryCtx.fillText(metric.formatScale(maxValue), x + width - 14, y + 31);
+  telemetryCtx.textAlign = "left";
+
+  for (let guide = 0; guide <= 3; guide += 1) {
+    const guideY = graphY + (graphH * guide) / 3;
+    telemetryCtx.fillStyle = guide === 3 ? "rgba(102, 220, 255, 0.08)" : "rgba(102, 220, 255, 0.04)";
+    telemetryCtx.fillRect(graphX, guideY, graphW, 1);
+  }
+
+  if (samples.length === 0) {
+    return;
+  }
+
+  const points = [];
+  const denom = Math.max(1, samples.length - 1);
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = clamp(samples[i][metric.key] || 0, 0, maxValue);
+    points.push({
+      x: graphX + (graphW * i) / denom,
+      y: graphY + graphH - (value / maxValue) * graphH
+    });
+  }
+
+  telemetryCtx.beginPath();
+  telemetryCtx.moveTo(points[0].x, graphY + graphH);
+  for (let i = 0; i < points.length; i += 1) {
+    telemetryCtx.lineTo(points[i].x, points[i].y);
+  }
+  telemetryCtx.lineTo(points[points.length - 1].x, graphY + graphH);
+  telemetryCtx.closePath();
+  const fill = telemetryCtx.createLinearGradient(0, graphY, 0, graphY + graphH);
+  fill.addColorStop(0, hexToRgba(lineColor, 0.3));
+  fill.addColorStop(1, hexToRgba(lineColor, 0.02));
+  telemetryCtx.fillStyle = fill;
+  telemetryCtx.fill();
+
+  telemetryCtx.strokeStyle = hexToRgba(lineColor, 0.18);
+  telemetryCtx.lineWidth = 4;
+  telemetryCtx.beginPath();
+  telemetryCtx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    telemetryCtx.lineTo(points[i].x, points[i].y);
+  }
+  telemetryCtx.stroke();
+
+  telemetryCtx.save();
+  telemetryCtx.strokeStyle = hexToRgba(lineColor, 0.98);
+  telemetryCtx.lineWidth = 1.8;
+  telemetryCtx.shadowBlur = 10;
+  telemetryCtx.shadowColor = hexToRgba(lineColor, 0.58);
+  telemetryCtx.beginPath();
+  telemetryCtx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    telemetryCtx.lineTo(points[i].x, points[i].y);
+  }
+  telemetryCtx.stroke();
+  telemetryCtx.restore();
+
+  const lastPoint = points[points.length - 1];
+  telemetryCtx.fillStyle = "#051019";
+  telemetryCtx.fillRect(lastPoint.x - 4, lastPoint.y - 4, 8, 8);
+  telemetryCtx.fillStyle = lineColor;
+  telemetryCtx.fillRect(lastPoint.x - 2, lastPoint.y - 2, 4, 4);
+}
+
+function drawTelemetryPanel() {
+  drawTelemetryBackground();
+
+  const samples = state.telemetryHistory;
+  if (samples.length === 0) {
+    telemetryCtx.fillStyle = "#8bbfca";
+    telemetryCtx.font = "18px Courier New";
+    telemetryCtx.fillText("NO TELEMETRY", 88, 180);
+    return;
+  }
+
+  const marginX = 14;
+  const marginTop = 14;
+  const marginBottom = 18;
+  const gap = 12;
+  const sectionHeight =
+    (telemetryCanvas.height - marginTop - marginBottom - gap * (TELEMETRY_SERIES.length - 1)) /
+    TELEMETRY_SERIES.length;
+
+  for (let i = 0; i < TELEMETRY_SERIES.length; i += 1) {
+    drawTelemetrySeries(
+      TELEMETRY_SERIES[i],
+      samples,
+      marginX,
+      marginTop + i * (sectionHeight + gap),
+      telemetryCanvas.width - marginX * 2,
+      sectionHeight,
+      i
+    );
+  }
+
+  telemetryCtx.fillStyle = "rgba(221, 250, 255, 0.62)";
+  telemetryCtx.font = "10px Courier New";
+  telemetryCtx.textAlign = "center";
+  telemetryCtx.fillText(
+    `ROLLING ${Math.round((TELEMETRY_HISTORY_LIMIT * TELEMETRY_SAMPLE_INTERVAL) / 60)}S WINDOW`,
+    telemetryCanvas.width * 0.5,
+    telemetryCanvas.height - 6
+  );
+  telemetryCtx.textAlign = "left";
+}
+
+function drawNetworkBackground() {
+  networkCtx.clearRect(0, 0, networkCanvas.width, networkCanvas.height);
+  networkCtx.fillStyle = "#051019";
+  networkCtx.fillRect(0, 0, networkCanvas.width, networkCanvas.height);
+
+  for (let y = 0; y < networkCanvas.height; y += 14) {
+    networkCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    networkCtx.fillRect(0, y, networkCanvas.width, 1);
+  }
+}
+
+function createNetworkDisplayState(featured) {
+  return {
+    featuredId: featured.id,
+    smoothedLayers: [
+      Array(INPUT_LABELS.length).fill(0),
+      ...CONFIG.hiddenLayerSizes.map((size) => Array(size).fill(0)),
+      Array(OUTPUT_LABELS.length).fill(0)
+    ],
+    connectionGlows: featured.brain.weights.map((layer) =>
+      layer.map((row) => row.map(() => 0))
+    )
+  };
+}
+
+function updateNetworkDisplayState(featured) {
+  if (!featured || !featured.senses) {
+    state.networkDisplay = null;
+    return null;
+  }
+
+  const rawLayers = [
+    featured.senses.inputs || [],
+    ...(featured.hiddenLayers || []),
+    featured.outputs || []
+  ];
+
+  const needsReset =
+    !state.networkDisplay ||
+    state.networkDisplay.featuredId !== featured.id ||
+    state.networkDisplay.connectionGlows.length !== featured.brain.weights.length;
+
+  if (needsReset) {
+    state.networkDisplay = createNetworkDisplayState(featured);
+  }
+
+  for (let layerIndex = 0; layerIndex < rawLayers.length; layerIndex += 1) {
+    const smoothedLayer = state.networkDisplay.smoothedLayers[layerIndex];
+    const rawLayer = rawLayers[layerIndex];
+    for (let nodeIndex = 0; nodeIndex < smoothedLayer.length; nodeIndex += 1) {
+      smoothedLayer[nodeIndex] = damp(
+        smoothedLayer[nodeIndex],
+        rawLayer[nodeIndex] || 0,
+        CONFIG.networkValueSmoothing
+      );
+    }
+  }
+
+  for (let layerIndex = 0; layerIndex < featured.brain.weights.length; layerIndex += 1) {
+    const weightLayer = featured.brain.weights[layerIndex];
+    const glowLayer = state.networkDisplay.connectionGlows[layerIndex];
+    const rawSourceLayer = rawLayers[layerIndex];
+    const rawTargetLayer = rawLayers[layerIndex + 1];
+
+    for (let rowIndex = 0; rowIndex < weightLayer.length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < weightLayer[rowIndex].length; colIndex += 1) {
+        const weight = weightLayer[rowIndex][colIndex];
+        const targetGlow = clamp(
+          Math.abs((rawSourceLayer[colIndex] || 0) * weight * (rawTargetLayer[rowIndex] || 0)) * 1.4,
+          0,
+          1
+        );
+        const currentGlow = glowLayer[rowIndex][colIndex];
+        const factor =
+          targetGlow > currentGlow
+            ? CONFIG.connectionGlowAttack
+            : CONFIG.connectionGlowDecay;
+        glowLayer[rowIndex][colIndex] = damp(currentGlow, targetGlow, factor);
+      }
+    }
+  }
+
+  return {
+    layers: state.networkDisplay.smoothedLayers,
+    connections: state.networkDisplay.connectionGlows
+  };
+}
+
+function buildLayerNodes(x, top, bottom, count) {
+  const nodes = [];
+  const gap = count === 1 ? 0 : (bottom - top) / (count - 1);
+  for (let i = 0; i < count; i += 1) {
+    nodes.push({ x, y: top + gap * i });
+  }
+  return nodes;
+}
+
+function drawConnections(fromNodes, toNodes, weights, glows) {
+  for (let j = 0; j < toNodes.length; j += 1) {
+    for (let i = 0; i < fromNodes.length; i += 1) {
+      const weight = weights[j][i];
+      const positive = weight >= 0;
+      const glow = glows[j][i];
+
+      networkCtx.shadowBlur = 0;
+      networkCtx.strokeStyle = positive
+        ? "rgba(74, 255, 212, 0.08)"
+        : "rgba(255, 109, 179, 0.08)";
+      networkCtx.lineWidth = 0.85 + Math.abs(weight) * 0.65;
+      networkCtx.beginPath();
+      networkCtx.moveTo(fromNodes[i].x, fromNodes[i].y);
+      networkCtx.lineTo(toNodes[j].x, toNodes[j].y);
+      networkCtx.stroke();
+
+      if (glow < 0.01) {
+        continue;
+      }
+
+      const alpha = clamp(glow * 0.92 + 0.03, 0.03, 0.95);
+      networkCtx.strokeStyle = positive
+        ? `rgba(74, 255, 212, ${alpha})`
+        : `rgba(255, 109, 179, ${alpha})`;
+      networkCtx.lineWidth = 1 + Math.abs(weight) * 1.35 + glow * 0.9;
+      networkCtx.shadowBlur = 6 + glow * 20;
+      networkCtx.shadowColor = positive
+        ? `rgba(74, 255, 212, ${0.18 + glow * 0.55})`
+        : `rgba(255, 109, 179, ${0.18 + glow * 0.55})`;
+      networkCtx.beginPath();
+      networkCtx.moveTo(fromNodes[i].x, fromNodes[i].y);
+      networkCtx.lineTo(toNodes[j].x, toNodes[j].y);
+      networkCtx.stroke();
+    }
+  }
+  networkCtx.shadowBlur = 0;
+}
+
+function drawLayerNodes(nodes, values, labels, colors, labelAlign) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    const value = values[i] || 0;
+    const strength = clamp(Math.abs(value), 0, 1);
+    const color = colors[i] || "#9de7ff";
+
+    networkCtx.beginPath();
+    networkCtx.fillStyle = "rgba(3, 11, 17, 0.96)";
+    networkCtx.arc(node.x, node.y, 10, 0, TAU);
+    networkCtx.fill();
+
+    networkCtx.beginPath();
+    networkCtx.fillStyle = color;
+    networkCtx.shadowBlur = 16;
+    networkCtx.shadowColor = color;
+    networkCtx.arc(node.x, node.y, 3 + strength * 6, 0, TAU);
+    networkCtx.fill();
+    networkCtx.shadowBlur = 0;
+
+    networkCtx.beginPath();
+    networkCtx.strokeStyle = hexToRgba(color, 0.4 + strength * 0.6);
+    networkCtx.lineWidth = 2;
+    networkCtx.arc(node.x, node.y, 10, 0, TAU);
+    networkCtx.stroke();
+
+    networkCtx.font = "9px Courier New";
+    networkCtx.fillStyle = "#ddfaff";
+    const label = labels[i];
+    if (label) {
+      if (labelAlign === "outside-right") {
+        networkCtx.textAlign = "left";
+        networkCtx.fillText(label, node.x + 18, node.y + 3);
+      } else if (labelAlign === "outside-left") {
+        networkCtx.textAlign = "right";
+        networkCtx.fillText(label, node.x - 18, node.y + 3);
+      } else {
+        networkCtx.textAlign = "center";
+        networkCtx.fillText(label, node.x, node.y - 16);
+      }
+    }
+  }
+  networkCtx.textAlign = "left";
+}
+
+function renderDetails(featured, displayLayers) {
+  const smoothedInputs = displayLayers[0] || [];
+  const smoothedOutputs = displayLayers[displayLayers.length - 1] || [];
+  const outputMarkup = MOVEMENT_OUTPUT_LABELS.map((label, index) => {
+    const value = smoothedOutputs[index] || 0;
+    return `
+      <div class="signal-line">
+        <span>${label}</span>
+        <div class="signal-bar"><i style="width:${Math.round(value * 100)}%"></i></div>
+        <b>${value.toFixed(2)}</b>
+      </div>
+    `;
+  }).join("");
+  const memoryMarkup = Array.from({ length: CONFIG.memoryNeuronCount }, (_, index) => {
+    const readValue = smoothedInputs[SENSOR_INPUT_COUNT + index] || 0;
+    const writeValue = (smoothedOutputs[MOVEMENT_OUTPUT_COUNT + index] || 0) * 2 - 1;
+    return `
+      <div class="signal-line memory-signal-line">
+        <span>MEM ${index + 1}</span>
+        <div class="signal-bar"><i style="width:${Math.round(((readValue + 1) * 0.5) * 100)}%"></i></div>
+        <b class="memory-values">R ${formatSignedSignal(readValue)} W ${formatSignedSignal(writeValue)}</b>
+      </div>
+    `;
+  }).join("");
+
+  creatureDetails.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-box"><span>CREATURE</span><strong>C-${String(featured.id).padStart(3, "0")}</strong></div>
+      <div class="detail-box"><span>AGE</span><strong>${formatAge(featured.age)}</strong></div>
+      <div class="detail-box"><span>ENERGY</span><strong>${featured.energy.toFixed(1)}</strong></div>
+      <div class="detail-box"><span>GENERATION</span><strong>${featured.generation}</strong></div>
+      <div class="detail-box"><span>SEGMENTS</span><strong>${getAdultSegmentCount(featured)}</strong></div>
+      <div class="detail-box"><span>OFFSPRING</span><strong>${featured.children}</strong></div>
+      <div class="detail-box"><span>STATE</span><strong>${featured.recentAction}</strong></div>
+    </div>
+    <div class="signal-readout">
+      ${outputMarkup}
+      <div class="signal-line">
+        <span>L EYE FOOD</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[0] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[1] || 0).toFixed(2)}</b>
+      </div>
+      <div class="signal-line">
+        <span>L EYE BODY</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[2] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[3] || 0).toFixed(2)}</b>
+      </div>
+      <div class="signal-line">
+        <span>L EYE WALL</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[4] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[5] || 0).toFixed(2)}</b>
+      </div>
+      <div class="signal-line">
+        <span>R EYE FOOD</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[6] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[7] || 0).toFixed(2)}</b>
+      </div>
+      <div class="signal-line">
+        <span>R EYE BODY</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[8] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[9] || 0).toFixed(2)}</b>
+      </div>
+      <div class="signal-line">
+        <span>R EYE WALL</span>
+        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[10] || 0) * 100)}%"></i></div>
+        <b>${(smoothedInputs[11] || 0).toFixed(2)}</b>
+      </div>
+      ${memoryMarkup}
+    </div>
+  `;
+}
+
+function drawNetworkPanel() {
+  drawNetworkBackground();
+
+  if (state.startupScene) {
+    const progress = clamp(state.startupScene.frame / Math.max(1, state.startupScene.totalFrames), 0, 1);
+    networkCtx.fillStyle = "#ddfaff";
+    networkCtx.font = "16px Courier New";
+    networkCtx.fillText("GENE LAB BOOTING", 112, 188);
+    networkCtx.font = "12px Courier New";
+    networkCtx.fillStyle = "#8bbfca";
+    networkCtx.fillText("NEURAL LINK WAITING", 114, 214);
+    networkCtx.fillStyle = "rgba(74, 255, 212, 0.18)";
+    networkCtx.fillRect(86, 236, networkCanvas.width - 172, 8);
+    networkCtx.fillStyle = "rgba(255, 241, 123, 0.8)";
+    networkCtx.fillRect(86, 236, (networkCanvas.width - 172) * progress, 8);
+    creatureDetails.innerHTML = '<p class="placeholder">The habitat is running its boot sequence. Neural tracking will lock onto the longest-living creature when the ecosystem is released.</p>';
+    return;
+  }
+
+  if (!state.featured || !state.featured.senses) {
+    networkCtx.fillStyle = "#8bbfca";
+    networkCtx.font = "16px Courier New";
+    networkCtx.fillText("NO ACTIVE CREATURE", 110, 190);
+    networkCtx.fillText("WAITING FOR BIOSIGNAL", 88, 216);
+    creatureDetails.innerHTML = '<p class="placeholder">The habitat is between lineages. A new population will reseed after extinction.</p>';
+    return;
+  }
+
+  const featured = state.featured;
+  const displayState = updateNetworkDisplayState(featured);
+  const layerValues = displayState.layers;
+  const inputs = layerValues[0] || [];
+  const outputs = layerValues[layerValues.length - 1] || [];
+  const hiddenLayers = layerValues.slice(1, -1);
+  const layerNodeCounts = [INPUT_LABELS.length, ...CONFIG.hiddenLayerSizes, OUTPUT_LABELS.length];
+  const layerNames = [
+    "INPUTS",
+    ...CONFIG.hiddenLayerSizes.map((_, index) => `H${index + 1}`),
+    "OUTPUTS"
+  ];
+  const xMargin = 96;
+  const usableWidth = networkCanvas.width - xMargin * 2;
+  const layerXs = layerNodeCounts.map((_, index) =>
+    xMargin + (usableWidth * index) / (layerNodeCounts.length - 1)
+  );
+  const layerNodes = layerNodeCounts.map((count, index) => {
+    if (index === 0) {
+      return buildLayerNodes(layerXs[index], 26, networkCanvas.height - 26, count);
+    }
+    if (index === layerNodeCounts.length - 1) {
+      return buildLayerNodes(layerXs[index], 110, networkCanvas.height - 110, count);
+    }
+    return buildLayerNodes(layerXs[index], 46, networkCanvas.height - 46, count);
+  });
+
+  for (let layerIndex = 0; layerIndex < featured.brain.weights.length; layerIndex += 1) {
+    drawConnections(
+      layerNodes[layerIndex],
+      layerNodes[layerIndex + 1],
+      featured.brain.weights[layerIndex],
+      displayState.connections[layerIndex]
+    );
+  }
+
+  drawLayerNodes(layerNodes[0], inputs, INPUT_LABELS, INPUT_COLORS, "outside-left");
+  for (let hiddenIndex = 0; hiddenIndex < hiddenLayers.length; hiddenIndex += 1) {
+    drawLayerNodes(
+      layerNodes[hiddenIndex + 1],
+      hiddenLayers[hiddenIndex],
+      Array(CONFIG.hiddenLayerSizes[hiddenIndex]).fill(""),
+      Array(CONFIG.hiddenLayerSizes[hiddenIndex]).fill("#9de7ff"),
+      "center"
+    );
+  }
+  drawLayerNodes(
+    layerNodes[layerNodes.length - 1],
+    outputs,
+    OUTPUT_LABELS,
+    OUTPUT_COLORS,
+    "outside-right"
+  );
+
+  networkCtx.fillStyle = "#ddfaff";
+  networkCtx.font = "12px Courier New";
+  networkCtx.textAlign = "center";
+  for (let i = 0; i < layerNames.length; i += 1) {
+    networkCtx.fillText(layerNames[i], layerXs[i], 16);
+  }
+  networkCtx.textAlign = "left";
+
+  renderDetails(featured, layerValues);
+}
+
+function updateStats() {
+  populationStat.textContent = String(getLivingCreaturesCount()).padStart(2, "0");
+  foodStat.textContent = String(state.foods.length).padStart(2, "0");
+  birthStat.textContent = String(state.births).padStart(2, "0");
+  oldestStat.textContent = state.featured ? formatAge(state.featured.age) : "--";
+  extinctionStat.textContent = String(state.extinctionCount).padStart(2, "0");
+  runtimeStat.textContent = formatRunTimer(state.tick);
+  lineageStat.textContent = formatRunTimer(state.lineageTick);
+}
+
+let lastTime = 0;
+let accumulator = 0;
+const step = 1000 / 60;
+
+function frame(timestamp) {
+  if (!lastTime) {
+    lastTime = timestamp;
+  }
+
+  const delta = Math.min(40, timestamp - lastTime);
+  lastTime = timestamp;
+  accumulator += delta;
+
+  while (accumulator >= step) {
+    if (state.startupScene) {
+      updateStartupScene();
+    } else {
+      updateSimulation();
+    }
+    updateExtinctionAudio();
+    accumulator -= step;
+  }
+
+  updateStats();
+  drawWorld();
+  drawTelemetryPanel();
+  drawNetworkPanel();
+  requestAnimationFrame(frame);
+}
+
+buildControlDeck();
+resetControlsButton.addEventListener("click", resetControlDeck);
+window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
+window.addEventListener("keydown", unlockAudioContext);
+seedWorld();
+state.startupScene = createStartupScene();
+chooseFeaturedCreature();
+updateStats();
+drawWorld();
+drawTelemetryPanel();
+drawNetworkPanel();
+requestAnimationFrame(frame);
