@@ -390,6 +390,11 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function quadraticPoint(a, b, c, t) {
+  const oneMinusT = 1 - t;
+  return oneMinusT * oneMinusT * a + 2 * oneMinusT * t * b + t * t * c;
+}
+
 function smooth01(value) {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
@@ -4657,14 +4662,70 @@ function drawIncubationEgg(ctx, plan, planState, x, y, isActive, flashPulse, lab
   ctx.restore();
 }
 
-function drawBrainDataCube(ctx, x, y, accent, intensity, scale, pulse) {
-  const cubeSize = Math.max(8, Math.round((9 + intensity * 4) * scale));
-  const depth = Math.max(2, Math.round(2 + intensity * 2));
+function drawBrainDataCube(ctx, x, y, accent, intensity, scale, pulse, options = {}) {
+  const time = options.time ?? state.tick;
+  const halo = clamp(options.halo ?? 0, 0, 1.8);
+  const shell = clamp(options.shell ?? 0, 0, 1.6);
+  const orbit = clamp(options.orbit ?? 0, 0, 1.4);
+  const cubeSize = Math.max(8, Math.round((9 + intensity * 4 + halo * 2) * scale));
+  const depth = Math.max(2, Math.round(2 + intensity * 2 + shell * 1.4));
   const halfSize = cubeSize * 0.5;
   const coreHeight = Math.max(3, Math.round((cubeSize - 6) * clamp(0.34 + pulse * 0.26, 0.28, 0.82)));
+  const shellGrow = 4 + halo * 8;
+  const orbitRadius = halfSize + 5 + orbit * 7;
+  const shimmer = 0.5 + Math.sin(time * 0.18 + pulse * TAU) * 0.5;
 
   ctx.save();
   ctx.translate(x, y);
+
+  if (halo > 0.01) {
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = `rgba(${accent}, ${0.08 + halo * 0.12})`;
+    ctx.fillRect(-halfSize - shellGrow, -halfSize - shellGrow, cubeSize + shellGrow * 2, cubeSize + shellGrow * 2);
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.14 + halo * 0.22})`;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      -halfSize - shellGrow * 0.6,
+      -halfSize - shellGrow * 0.6,
+      cubeSize + shellGrow * 1.2,
+      cubeSize + shellGrow * 1.2
+    );
+  }
+
+  if (shell > 0.01) {
+    const shellOffset = 3 + shell * 5;
+    ctx.strokeStyle = `rgba(${accent}, ${0.18 + shell * 0.26})`;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      -halfSize - shellOffset,
+      -halfSize - shellOffset,
+      cubeSize + shellOffset * 2,
+      cubeSize + shellOffset * 2
+    );
+    ctx.strokeStyle = `rgba(255, 241, 123, ${0.12 + shell * 0.22})`;
+    ctx.strokeRect(
+      -halfSize - shellOffset - 3,
+      -halfSize - shellOffset - 3,
+      cubeSize + (shellOffset + 3) * 2,
+      cubeSize + (shellOffset + 3) * 2
+    );
+  }
+
+  if (orbit > 0.01) {
+    ctx.globalCompositeOperation = "lighter";
+    for (let orbitIndex = 0; orbitIndex < 4; orbitIndex += 1) {
+      const angle = time * 0.11 + orbitIndex * (TAU / 4) + pulse * 0.6;
+      const orbitX = Math.cos(angle) * orbitRadius;
+      const orbitY = Math.sin(angle) * orbitRadius * 0.74;
+      const packetSize = 2 + Math.round(orbit * 1.6);
+      ctx.fillStyle = orbitIndex % 2 === 0
+        ? `rgba(255, 241, 123, ${0.18 + orbit * 0.24})`
+        : `rgba(${accent}, ${0.16 + orbit * 0.24})`;
+      ctx.fillRect(Math.round(orbitX) - packetSize, Math.round(orbitY) - packetSize, packetSize * 2, packetSize * 2);
+    }
+  }
+
+  ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = `rgba(4, 12, 20, ${0.72 + intensity * 0.12})`;
   ctx.fillRect(-halfSize, -halfSize, cubeSize, cubeSize);
   ctx.strokeStyle = `rgba(${accent}, ${0.32 + intensity * 0.4})`;
@@ -4687,6 +4748,16 @@ function drawBrainDataCube(ctx, x, y, accent, intensity, scale, pulse) {
 
   ctx.fillStyle = `rgba(${accent}, ${0.18 + intensity * 0.22})`;
   ctx.fillRect(-halfSize + 2, -halfSize + 2, cubeSize - 4, cubeSize - 4);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.08 + halo * 0.12})`;
+  ctx.fillRect(-halfSize + 3, -halfSize + 3, cubeSize - 6, cubeSize - 6);
+  for (let barIndex = 0; barIndex < 3; barIndex += 1) {
+    const barX = -halfSize + 4 + barIndex * Math.max(3, Math.round(cubeSize * 0.22));
+    const barHeight = Math.max(3, Math.round((cubeSize - 8) * (0.34 + shimmer * 0.24 + barIndex * 0.08)));
+    ctx.fillStyle = barIndex === 1
+      ? `rgba(255, 241, 123, ${0.18 + intensity * 0.22 + halo * 0.12})`
+      : `rgba(${accent}, ${0.18 + intensity * 0.18 + halo * 0.1})`;
+    ctx.fillRect(barX, halfSize - 4 - barHeight, 2, barHeight);
+  }
   ctx.fillStyle = `rgba(255, 241, 123, ${0.28 + intensity * 0.24})`;
   ctx.fillRect(-1, halfSize - 3 - coreHeight, 2, coreHeight);
   ctx.fillStyle = `rgba(221, 250, 255, ${0.22 + intensity * 0.16})`;
@@ -4694,6 +4765,33 @@ function drawBrainDataCube(ctx, x, y, accent, intensity, scale, pulse) {
 
   ctx.fillStyle = `rgba(255, 255, 255, ${0.38 + intensity * 0.22})`;
   ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+}
+
+function drawCubeSynthesisBox(ctx, x, y, width, height, accent, charge, pulse, time) {
+  const shimmer = 0.5 + Math.sin(time * 0.16 + pulse * TAU) * 0.5;
+  const innerGlow = 0.08 + charge * 0.14 + shimmer * 0.04;
+
+  ctx.save();
+  ctx.fillStyle = `rgba(5, 14, 23, ${0.82 + charge * 0.08})`;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = `rgba(${accent}, ${0.18 + charge * 0.3})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+  ctx.strokeStyle = `rgba(255, 241, 123, ${0.12 + charge * 0.22})`;
+  ctx.strokeRect(x + 4, y + 4, width - 8, height - 8);
+
+  ctx.fillStyle = `rgba(${accent}, ${innerGlow})`;
+  ctx.fillRect(x + 6, y + 6, width - 12, height - 12);
+  ctx.fillStyle = `rgba(255, 241, 123, ${0.16 + charge * 0.18})`;
+  ctx.fillRect(x + 8, y + height * 0.5 - 1, width - 16, 2);
+  ctx.fillRect(x + width * 0.5 - 1, y + 8, 2, height - 16);
+
+  ctx.fillStyle = `rgba(221, 250, 255, ${0.24 + charge * 0.18})`;
+  ctx.fillRect(x + 8, y + 8, width - 16, 2);
+  ctx.fillStyle = `rgba(${accent}, ${0.14 + charge * 0.16})`;
+  ctx.fillRect(x - 6, y + height - 8, 6, 2);
+  ctx.fillRect(x + width, y + height - 8, 6, 2);
   ctx.restore();
 }
 
@@ -5094,6 +5192,12 @@ function drawExtinctionScene() {
   const specimenCenterX = specimenX + specimenW * 0.5;
   const winnerCenterX = winnerX + winnerW * 0.5;
   const forgeCenterX = forgeX + forgeW * 0.5;
+  const cubeForgeBoxW = 96;
+  const cubeForgeBoxH = 40;
+  const cubeForgeBoxX = forgeCenterX - cubeForgeBoxW * 0.5;
+  const cubeForgeBoxY = forgeY + forgeH - cubeForgeBoxH - 64;
+  const cubeForgeBoxCenterX = cubeForgeBoxX + cubeForgeBoxW * 0.5;
+  const cubeForgeBoxCenterY = cubeForgeBoxY + cubeForgeBoxH * 0.56;
   const scanFrames = scene.scanFrames;
   const outroFrames = scene.outroFrames;
   const generationFrame = Math.max(0, scene.frame - scanFrames);
@@ -5465,6 +5569,57 @@ function drawExtinctionScene() {
   worldCtx.textAlign = "left";
 
   if (activePlan) {
+    const forgeBoxAccent = activePlan.inherited ? "255, 241, 123" : "102, 220, 255";
+    const forgeBoxCharge = clamp(
+      activePlanState.buildProgress * 0.22 +
+      activePlanState.packageProgress * 0.76 +
+      activePlanState.transferProgress * 0.56 +
+      activePlanState.implantProgress * 0.28,
+      0,
+      1
+    );
+    drawCubeSynthesisBox(
+      worldCtx,
+      cubeForgeBoxX,
+      cubeForgeBoxY,
+      cubeForgeBoxW,
+      cubeForgeBoxH,
+      forgeBoxAccent,
+      forgeBoxCharge,
+      flashPulse,
+      scene.frame
+    );
+
+    const mutationCubeGrowth = clamp(
+      activePlanState.mutationProgress + (activePlanState.mutationPauseActive ? 0.18 : 0),
+      0,
+      1
+    );
+    if (
+      mutationCubeGrowth > 0.01 &&
+      activePlanState.packageProgress <= 0.01 &&
+      activePlanState.cubeTravelProgress <= 0.01 &&
+      activePlanState.implantProgress <= 0.01
+    ) {
+      const cubeLift = (1 - mutationCubeGrowth) * 4 + Math.sin(scene.frame * 0.14 + activePlanIndex * 0.8) * 1.4;
+      const cubePulse = 0.5 + Math.sin(scene.frame * 0.16 + mutationCubeGrowth * 2.2) * 0.5;
+      drawBrainDataCube(
+        worldCtx,
+        cubeForgeBoxCenterX,
+        cubeForgeBoxCenterY - cubeLift,
+        forgeBoxAccent,
+        0.2 + mutationCubeGrowth * 0.42,
+        0.22 + mutationCubeGrowth * 0.74,
+        cubePulse,
+        {
+          time: scene.frame,
+          halo: 0.04 + mutationCubeGrowth * 0.26,
+          shell: 0.04 + mutationCubeGrowth * 0.24,
+          orbit: mutationCubeGrowth * 0.08
+        }
+      );
+    }
+
     if (activePlan.inherited && scene.sourceBrain && activePlanState.buildProgress > 0) {
       const linkStartX = winnerX + winnerW + 14;
       const linkStartY = winnerY + winnerH * 0.48;
@@ -5668,38 +5823,69 @@ function drawExtinctionScene() {
     );
 
     if (isActive && (planState.packageProgress > 0 || planState.cubeTravelProgress > 0 || planState.implantProgress > 0)) {
-      const beamStartX = forgeCenterX;
-      const beamStartY = forgeY + forgeH + 8;
+      const beamStartX = cubeForgeBoxCenterX;
+      const beamStartY = cubeForgeBoxCenterY;
       const beamTargetX = position.x;
       const beamTargetY = position.y + 16;
       const accent = plan.inherited ? "255, 241, 123" : "102, 220, 255";
       const packagePulse = 0.5 + Math.sin(scene.frame * 0.14 + generationSlot * 0.8) * 0.5;
+      const beamDx = beamTargetX - beamStartX;
+      const beamDy = beamTargetY - beamStartY;
+      const beamDistance = Math.max(1, Math.hypot(beamDx, beamDy));
+      const beamNormalX = -beamDy / beamDistance;
+      const beamNormalY = beamDx / beamDistance;
+      const beamArc = (plan.inherited ? 1 : -1) * (10 + planState.transferProgress * 22 + flashPulse * 8);
+      const beamControlX = lerp(beamStartX, beamTargetX, 0.5) + beamNormalX * beamArc;
+      const beamControlY = lerp(beamStartY, beamTargetY, 0.5) + beamNormalY * beamArc;
       const cubeX = planState.cubeTravelProgress > 0
-        ? lerp(beamStartX, beamTargetX, planState.cubeTravelProgress)
+        ? quadraticPoint(beamStartX, beamControlX, beamTargetX, planState.cubeTravelProgress)
         : beamStartX;
       const cubeY = planState.cubeTravelProgress > 0
-        ? lerp(beamStartY, beamTargetY, planState.cubeTravelProgress)
+        ? quadraticPoint(beamStartY, beamControlY, beamTargetY, planState.cubeTravelProgress)
         : beamStartY;
 
       worldCtx.save();
       worldCtx.globalCompositeOperation = "lighter";
       if (planState.cubeTravelProgress > 0 || planState.implantProgress > 0) {
-        worldCtx.strokeStyle = `rgba(${accent}, ${0.16 + planState.transferProgress * 0.28})`;
-        worldCtx.lineWidth = 1 + planState.transferProgress * 0.9;
-        worldCtx.shadowBlur = 0;
+        worldCtx.strokeStyle = `rgba(${accent}, ${0.12 + planState.transferProgress * 0.14})`;
+        worldCtx.lineWidth = 3 + planState.transferProgress * 4;
+        worldCtx.shadowBlur = 14 + planState.transferProgress * 18;
+        worldCtx.shadowColor = `rgba(${accent}, ${0.18 + planState.transferProgress * 0.32})`;
         worldCtx.beginPath();
         worldCtx.moveTo(beamStartX, beamStartY);
-        worldCtx.lineTo(beamTargetX, beamTargetY);
+        worldCtx.quadraticCurveTo(beamControlX, beamControlY, beamTargetX, beamTargetY);
+        worldCtx.stroke();
+        worldCtx.shadowBlur = 0;
+
+        worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.18 + planState.transferProgress * 0.28})`;
+        worldCtx.lineWidth = 1.1 + planState.transferProgress * 1.2;
+        worldCtx.beginPath();
+        worldCtx.moveTo(beamStartX, beamStartY);
+        worldCtx.quadraticCurveTo(beamControlX, beamControlY, beamTargetX, beamTargetY);
         worldCtx.stroke();
 
-        const packetX = lerp(beamStartX, beamTargetX, planState.cubeTravelProgress);
-        const packetY = lerp(beamStartY, beamTargetY, planState.cubeTravelProgress);
-        worldCtx.fillStyle = `rgba(${accent}, ${0.16 + planState.transferProgress * 0.18})`;
-        worldCtx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+        for (let tailIndex = 0; tailIndex < 4; tailIndex += 1) {
+          const packetT = clamp(planState.cubeTravelProgress - tailIndex * 0.1, 0, 1);
+          if (packetT <= 0) {
+            continue;
+          }
+          const packetX = quadraticPoint(beamStartX, beamControlX, beamTargetX, packetT);
+          const packetY = quadraticPoint(beamStartY, beamControlY, beamTargetY, packetT);
+          const packetSize = Math.max(2, 5 - tailIndex);
+          worldCtx.fillStyle = tailIndex === 0
+            ? `rgba(255, 241, 123, ${0.26 + planState.transferProgress * 0.3})`
+            : `rgba(${accent}, ${0.12 + planState.transferProgress * (0.22 - tailIndex * 0.03)})`;
+          worldCtx.fillRect(
+            Math.round(packetX) - packetSize * 0.5,
+            Math.round(packetY) - packetSize * 0.5,
+            packetSize,
+            packetSize
+          );
+        }
       }
 
       if (planState.packageProgress > 0 && planState.cubeTravelProgress <= 0.01) {
-        const braceSize = 18 - planState.packageProgress * 6;
+        const braceSize = 28 - planState.packageProgress * 10;
         worldCtx.strokeStyle = `rgba(${accent}, ${0.16 + planState.packageProgress * 0.26})`;
         worldCtx.lineWidth = 1;
         worldCtx.strokeRect(
@@ -5708,38 +5894,98 @@ function drawExtinctionScene() {
           braceSize,
           braceSize
         );
+        worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.16 + planState.packageProgress * 0.26})`;
+        worldCtx.strokeRect(
+          beamStartX - braceSize * 0.5 - 6,
+          beamStartY - braceSize * 0.5 - 6,
+          braceSize + 12,
+          braceSize + 12
+        );
         drawBrainDataCube(
           worldCtx,
           beamStartX,
           beamStartY,
           accent,
-          0.46 + planState.packageProgress * 0.4,
-          0.74 + planState.packageProgress * 0.34,
-          packagePulse
+          0.54 + planState.packageProgress * 0.48,
+          1.02 + planState.packageProgress * 0.82,
+          packagePulse,
+          {
+            time: scene.frame,
+            halo: 0.28 + planState.packageProgress * 0.72,
+            shell: 0.22 + planState.packageProgress * 0.78,
+            orbit: 0.16 + planState.packageProgress * 0.54
+          }
         );
       }
 
       if (planState.cubeTravelProgress > 0) {
+        for (let echoIndex = 2; echoIndex >= 1; echoIndex -= 1) {
+          const echoT = clamp(planState.cubeTravelProgress - echoIndex * 0.08, 0, 1);
+          if (echoT <= 0) {
+            continue;
+          }
+          const echoX = quadraticPoint(beamStartX, beamControlX, beamTargetX, echoT);
+          const echoY = quadraticPoint(beamStartY, beamControlY, beamTargetY, echoT);
+          worldCtx.save();
+          worldCtx.globalAlpha = 0.18 + planState.transferProgress * 0.08 - echoIndex * 0.04;
+          drawBrainDataCube(
+            worldCtx,
+            echoX,
+            echoY,
+            accent,
+            0.28 + planState.transferProgress * 0.16,
+            0.96 + planState.transferProgress * 0.26 - echoIndex * 0.08,
+            packagePulse,
+            {
+              time: scene.frame,
+              halo: 0.08 + planState.transferProgress * 0.18,
+              shell: 0.04 + planState.transferProgress * 0.14,
+              orbit: 0
+            }
+          );
+          worldCtx.restore();
+        }
         drawBrainDataCube(
           worldCtx,
           cubeX,
           cubeY,
           accent,
-          0.58 + planState.transferProgress * 0.32,
-          1,
-          packagePulse
+          0.72 + planState.transferProgress * 0.46,
+          1.42 + planState.transferProgress * 0.88,
+          packagePulse,
+          {
+            time: scene.frame,
+            halo: 0.54 + planState.transferProgress * 0.68,
+            shell: 0.48 + planState.transferProgress * 0.58,
+            orbit: 0.38 + planState.transferProgress * 0.56
+          }
         );
       }
 
       if (planState.implantProgress > 0) {
+        const implantPulse = 1 - planState.implantProgress;
+        worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.18 + implantPulse * 0.28})`;
+        worldCtx.lineWidth = 1.6;
+        worldCtx.strokeRect(
+          beamTargetX - 18 - implantPulse * 10,
+          beamTargetY - 18 - implantPulse * 10,
+          36 + implantPulse * 20,
+          36 + implantPulse * 20
+        );
         drawBrainDataCube(
           worldCtx,
           beamTargetX,
           beamTargetY,
           accent,
-          0.44 + (1 - planState.implantProgress) * 0.22,
-          1 - planState.implantProgress * 0.45,
-          packagePulse
+          0.54 + implantPulse * 0.34,
+          1.22 - planState.implantProgress * 0.32,
+          packagePulse,
+          {
+            time: scene.frame,
+            halo: 0.28 + implantPulse * 0.54,
+            shell: 0.22 + implantPulse * 0.42,
+            orbit: implantPulse * 0.24
+          }
         );
       }
       worldCtx.restore();
