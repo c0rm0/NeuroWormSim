@@ -16,6 +16,7 @@ const creatureDetails = document.getElementById("creatureDetails");
 const controlDeck = document.getElementById("controlDeck");
 const resetControlsButton = document.getElementById("resetControlsButton");
 const sampleLongestButton = document.getElementById("sampleLongestButton");
+const spawnTrophyWormButton = document.getElementById("spawnTrophyWormButton");
 const openBrainBankButton = document.getElementById("openBrainBankButton");
 const brainBankStatus = document.getElementById("brainBankStatus");
 const brainBankModal = document.getElementById("brainBankModal");
@@ -37,14 +38,24 @@ brainBankHabitatCtx.imageSmoothingEnabled = false;
 const WIDTH = worldCanvas.width;
 const HEIGHT = worldCanvas.height;
 const TAU = Math.PI * 2;
+const CANVAS_FONTS = Object.freeze({
+  hero: "20px Courier New",
+  title: "18px Courier New",
+  section: "14px Courier New",
+  panelCopy: "13px Courier New",
+  body: "12px Courier New",
+  compact: "11px Courier New",
+  small: "10px Courier New",
+  tiny: "8px Courier New"
+});
 
 const DEFAULT_CONFIG = {
   initialCreatures: 18,
   maxCreatures: 36,
   initialFood: 6,
   maxFood: 100,
-  creatureRadius: 10,
-  foodRadius: 4,
+  creatureRadius: 12,
+  foodRadius: 5,
   eyeRange: 150,
   eyeFov: 1.16,
   eyeOffset: 0.52,
@@ -72,15 +83,18 @@ const DEFAULT_CONFIG = {
   memoryWriteBlend: 0.22,
   segmentGeneMin: 3,
   segmentGeneMax: 8,
-  segmentFollowStiffness: 0.09,
-  segmentConstraintPull: 0.32,
-  segmentVelocityDamping: 0.86,
-  segmentAngleFollow: 0.12,
-  segmentAngleCarry: 0.025,
-  segmentMaxSpeed: 1.35,
-  segmentCollisionTransfer: 0.08,
-  segmentWallBounce: 0.26,
-  segmentTurnCurlStrength: 1.35,
+  segmentFollowStiffness: 0.045,
+  segmentConstraintPull: 0.18,
+  segmentVelocityDamping: 0.9,
+  segmentAngleFollow: 0.08,
+  segmentAngleCarry: 0.018,
+  segmentAngularDamping: 0.62,
+  segmentMaxAngularSpeed: 0.14,
+  segmentMaxSpeed: 2.4,
+  segmentCollisionTransfer: 0.1,
+  segmentImpactSpread: 0.58,
+  segmentWallBounce: 0.34,
+  segmentTurnCurlStrength: 0.9,
   segmentSignalSmoothing: 0.14,
   reproduceThreshold: 112,
   reproduceCost: 42,
@@ -176,6 +190,10 @@ const BRAIN_BANK_DB_STORE = "brainBankSettings";
 const BRAIN_BANK_DIR_HANDLE_KEY = "brainBankDirectoryHandle";
 const BRAIN_BANK_FOLDER_NAME = "brain-bank";
 const BRAIN_BANK_PICKER_ID = "neurowormsim-brain-bank-root";
+const TROPHY_WORM_ASSET_PATH = "brain-bank/brain-bank/c-4555-g-188-age-07311f-20260330-015153.json";
+const TROPHY_WORM_ASSET_FILE_NAME = "c-4555-g-188-age-07311f-20260330-015153.json";
+const TROPHY_WORM_NAME = "Trophy Worm";
+const TROPHY_WORM_BUNDLE_KEY = "BUNDLED_TROPHY_WORM_PAYLOAD";
 
 const CONTROL_DEFS = [
   {
@@ -311,11 +329,15 @@ const state = {
   brainBankFocusId: null,
   brainBankMessage: "No preserved specimens stored yet.",
   brainBankHabitatDrawTick: -1,
+  trophyWormEntry: null,
+  trophyWormLoadState: "idle",
   networkDisplay: null,
   startupScene: null,
   telemetryHistory: [],
   telemetrySampleClock: 0
 };
+
+let trophyWormLoadPromise = null;
 
 const audioState = {
   context: null,
@@ -1254,6 +1276,15 @@ function describeBrainBankOrigin(origin) {
   return origin === "imported" ? "IMPORTED FILE" : "LIVE SAMPLE";
 }
 
+function isBundledTrophyWormFileName(fileName) {
+  return String(fileName || "").toLowerCase() === TROPHY_WORM_ASSET_FILE_NAME.toLowerCase();
+}
+
+function getBundledTrophyWormPayload() {
+  const payload = globalThis[TROPHY_WORM_BUNDLE_KEY];
+  return payload && typeof payload === "object" ? payload : null;
+}
+
 function cloneBrainBankSpecimen(specimen, brainOverride = null) {
   const brain = brainOverride || specimen?.brain;
   if (!brain) {
@@ -1441,6 +1472,9 @@ async function loadBrainBankEntriesFromDisk() {
     if (handle.kind !== "file" || !name.toLowerCase().endsWith(".json")) {
       continue;
     }
+    if (isBundledTrophyWormFileName(name)) {
+      continue;
+    }
 
     try {
       const file = await handle.getFile();
@@ -1483,6 +1517,15 @@ function updateBrainBankUi() {
   const countLabel = storedCount > 0 ? ` (${String(storedCount).padStart(2, "0")})` : "";
   openBrainBankButton.textContent = `OPEN BRAIN BANK${countLabel}`;
   sampleLongestButton.disabled = !state.featured || isBrainBankBusy();
+  spawnTrophyWormButton.disabled =
+    isBrainBankBusy() ||
+    getLivingCreaturesCount() >= CONFIG.maxCreatures ||
+    state.trophyWormLoadState === "loading";
+  spawnTrophyWormButton.title = state.trophyWormLoadState === "loading"
+    ? "Loading the bundled Trophy Worm specimen."
+    : state.trophyWormEntry
+      ? "Spawn the built-in Trophy Worm specimen into the habitat."
+      : "Retry loading the bundled Trophy Worm specimen.";
 
   let status = state.brainBankMessage;
   if (state.brainBankScene) {
@@ -1491,7 +1534,7 @@ function updateBrainBankUi() {
     status = "Brain bank locked while the extinction foundry rebuilds the population.";
   } else if (state.startupScene) {
     status = "Brain sampling will unlock when the habitat boot sequence finishes.";
-  } else if (!status || storedCount === 0) {
+  } else if (!status) {
     status = storedCount > 0
       ? `${storedCount} stored specimen${storedCount === 1 ? "" : "s"} ready for export or release.`
       : "No preserved specimens stored yet.";
@@ -1608,7 +1651,7 @@ function drawBrainBankHabitatView(force = false) {
   ctx.lineWidth = 1;
   ctx.strokeRect(12.5, 12.5, 137, 43);
   ctx.fillStyle = "#ddfaff";
-  ctx.font = "10px Courier New";
+  ctx.font = CANVAS_FONTS.body;
   ctx.fillText("CLOSED HABITAT", 22, 28);
   ctx.fillStyle = "#8bbfca";
   ctx.fillText(`TICK ${String(state.tick).padStart(5, "0")}`, 22, 44);
@@ -1720,14 +1763,24 @@ function releaseBrainBankClone(entryId) {
     return;
   }
 
+  spawnBrainBankCreature(entry, {
+    recentAction: "BANK",
+    sparkColor: "#fff17b",
+    busyMessage: "Wait for the active lab animation to finish before releasing a stored clone.",
+    populationMessage: "Population cap reached. Lower the count or wait for space before releasing a clone.",
+    successMessage: (specimenEntry) => `Released a live clone from ${specimenEntry.displayName}.`
+  });
+}
+
+function spawnBrainBankCreature(entry, options = {}) {
   if (isBrainBankBusy()) {
-    setBrainBankMessage("Wait for the active lab animation to finish before releasing a stored clone.");
-    return;
+    setBrainBankMessage(options.busyMessage || "Wait for the active lab animation to finish before spawning a stored specimen.");
+    return false;
   }
 
   if (getLivingCreaturesCount() >= CONFIG.maxCreatures) {
-    setBrainBankMessage("Population cap reached. Lower the count or wait for space before releasing a clone.");
-    return;
+    setBrainBankMessage(options.populationMessage || "Population cap reached. Lower the count or wait for space before spawning a stored specimen.");
+    return false;
   }
 
   const clone = createCreature(null, {
@@ -1741,15 +1794,20 @@ function releaseBrainBankClone(entryId) {
     energyOverride: CONFIG.startingEnergy
   });
 
-  clone.recentAction = "BANK";
+  clone.recentAction = options.recentAction || "BANK";
   state.creatures.push(clone);
-  spawnSpark(clone.x, clone.y, "#fff17b", 12);
+  spawnSpark(clone.x, clone.y, options.sparkColor || "#fff17b", options.sparkCount || 12);
   playBirthSound(clone.x);
   chooseFeaturedCreature();
   renderBrainBankList();
   renderSimulationPanels();
   drawBrainBankHabitatView(true);
-  setBrainBankMessage(`Released a live clone from ${entry.displayName}.`);
+  setBrainBankMessage(
+    typeof options.successMessage === "function"
+      ? options.successMessage(entry)
+      : options.successMessage || `Released a live clone from ${entry.displayName}.`
+  );
+  return true;
 }
 
 function createBrainBankEntryFromFilePayload(payload, fileName) {
@@ -1793,6 +1851,102 @@ function createBrainBankEntryFromFilePayload(payload, fileName) {
   );
 }
 
+function createTrophyWormEntryFromFilePayload(payload) {
+  const brain = payload?.brain || payload?.specimen?.brain;
+  if (!isValidBrainShape(brain)) {
+    throw new Error("The bundled trophy worm brain file is not compatible with this lab.");
+  }
+
+  const metadata = payload?.metadata || {};
+  const specimenSource = payload?.specimen || {
+    hue: metadata.hue,
+    energy: CONFIG.startingEnergy,
+    age: metadata.ageFrames,
+    generation: metadata.generation,
+    segmentGene: metadata.segmentGene,
+    lifeStage: "adult",
+    heading: -0.18
+  };
+  const specimen = cloneBrainBankSpecimen(specimenSource, brain);
+
+  return {
+    displayName: TROPHY_WORM_NAME,
+    creatureId: metadata.sourceCreatureId ?? null,
+    origin: "trophy",
+    sampledAtIso: payload?.exportedAt || new Date().toISOString(),
+    sampledTick: metadata.sampledTick ?? 0,
+    note: "Bundled trophy specimen included with the lab.",
+    fileName: TROPHY_WORM_ASSET_FILE_NAME,
+    brain: cloneBrain(brain),
+    specimen,
+    hue: specimen.hue,
+    generation: specimen.generation,
+    segmentGene: specimen.segmentGene,
+    ageFrames: specimen.age
+  };
+}
+
+async function loadTrophyWormFromAsset(force = false) {
+  if (trophyWormLoadPromise) {
+    return trophyWormLoadPromise;
+  }
+
+  if (!force && state.trophyWormEntry) {
+    return true;
+  }
+
+  state.trophyWormLoadState = "loading";
+  updateBrainBankUi();
+
+  trophyWormLoadPromise = (async () => {
+    try {
+      const bundledPayload = getBundledTrophyWormPayload();
+      if (bundledPayload) {
+        state.trophyWormEntry = createTrophyWormEntryFromFilePayload(bundledPayload);
+        state.trophyWormLoadState = "ready";
+        return true;
+      }
+
+      const response = await fetch(TROPHY_WORM_ASSET_PATH, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = JSON.parse(await response.text());
+      state.trophyWormEntry = createTrophyWormEntryFromFilePayload(payload);
+      state.trophyWormLoadState = "ready";
+      return true;
+    } catch (error) {
+      state.trophyWormEntry = null;
+      state.trophyWormLoadState = "error";
+      return false;
+    } finally {
+      trophyWormLoadPromise = null;
+      updateBrainBankUi();
+    }
+  })();
+
+  return trophyWormLoadPromise;
+}
+
+async function spawnTrophyWorm() {
+  if (!state.trophyWormEntry) {
+    setBrainBankMessage("Loading the built-in Trophy Worm specimen.");
+    const loaded = await loadTrophyWormFromAsset(true);
+    if (!loaded || !state.trophyWormEntry) {
+      setBrainBankMessage("The built-in Trophy Worm could not be loaded from its bundled brain file.");
+      return;
+    }
+  }
+
+  spawnBrainBankCreature(state.trophyWormEntry, {
+    recentAction: "TROPHY",
+    sparkColor: "#8ed7ff",
+    busyMessage: "Wait for the active lab animation to finish before spawning the Trophy Worm.",
+    populationMessage: "Population cap reached. Lower the count or wait for space before spawning the Trophy Worm.",
+    successMessage: (entry) => `Spawned ${entry.displayName} into the habitat.`
+  });
+}
+
 async function importBrainBankFiles(fileList) {
   const files = Array.from(fileList || []);
   if (files.length === 0) {
@@ -1801,10 +1955,15 @@ async function importBrainBankFiles(fileList) {
 
   let imported = 0;
   let failed = 0;
+  let reserved = 0;
   let newestEntryId = null;
 
   for (let i = 0; i < files.length; i += 1) {
     const file = files[i];
+    if (isBundledTrophyWormFileName(file.name)) {
+      reserved += 1;
+      continue;
+    }
     try {
       const payload = JSON.parse(await file.text());
       const entry = createBrainBankEntryFromFilePayload(payload, file.name);
@@ -1823,10 +1982,19 @@ async function importBrainBankFiles(fileList) {
   }
   renderBrainBankList();
   setBrainBankModalOpen(true, newestEntryId);
-  if (imported > 0 && failed === 0) {
+  if (imported > 0 && failed === 0 && reserved === 0) {
     setBrainBankMessage(`Imported ${imported} brain specimen file${imported === 1 ? "" : "s"} into the vault.`);
   } else if (imported > 0) {
+    const reservedCopy = reserved > 0
+      ? ` The bundled Trophy Worm stays separate and ${reserved === 1 ? "was" : "were"} not imported.`
+      : "";
+    if (failed === 0) {
+      setBrainBankMessage(`Imported ${imported} brain file${imported === 1 ? "" : "s"} into the vault.${reservedCopy}`);
+      return;
+    }
     setBrainBankMessage(`Imported ${imported} brain file${imported === 1 ? "" : "s"} and skipped ${failed} incompatible file${failed === 1 ? "" : "s"}.`);
+  } else if (reserved > 0 && failed === 0) {
+    setBrainBankMessage("The bundled Trophy Worm is already available from its own spawn button, so it was not imported into the vault.");
   } else {
     setBrainBankMessage("No compatible brain specimen files were imported.");
   }
@@ -1965,8 +2133,9 @@ function getCreatureGrowthScale(creature) {
 function getCreatureBodyMetrics(creature) {
   const lifeScale = getCreatureGrowthScale(creature);
   const energyRatio = clamp(creature.energy / CONFIG.maxEnergy, 0.08, 1);
-  const headLength = Math.round((14 + energyRatio * 5) * lifeScale);
-  const headHeight = Math.round((6 + energyRatio * 8) * lifeScale);
+  const radiusScale = (creature.radius || CONFIG.creatureRadius) / 10;
+  const headLength = Math.round((14 + energyRatio * 5) * lifeScale * radiusScale);
+  const headHeight = Math.round((6 + energyRatio * 8) * lifeScale * radiusScale);
   const headOuterWidth = Math.max(10, Math.round(headLength * 1.02));
   const headOuterHeight = Math.max(7, Math.round(headHeight * 1.02));
   const headInnerWidth = Math.max(8, Math.round(headOuterWidth * 0.9));
@@ -2059,7 +2228,8 @@ function ensureCreatureSegmentBodies(creature, bodyMetrics) {
         y: parentY - Math.sin(parentAngle) * spacing,
         vx: 0,
         vy: 0,
-        angle: parentAngle
+        angle: parentAngle,
+        angularVelocity: 0
       };
       creature.segmentBodies.push(segment);
     } else if (
@@ -2072,11 +2242,88 @@ function ensureCreatureSegmentBodies(creature, bodyMetrics) {
       segment.vx = 0;
       segment.vy = 0;
       segment.angle = parentAngle;
+      segment.angularVelocity = 0;
+    } else if (!Number.isFinite(segment.angularVelocity)) {
+      segment.angularVelocity = 0;
     }
 
     parentX = segment.x;
     parentY = segment.y;
     parentAngle = segment.angle;
+  }
+}
+
+function solveSegmentConstraint(parent, child, spacing, stiffness, parentShare = 0.35) {
+  let dx = child.x - parent.x;
+  let dy = child.y - parent.y;
+  let distance = Math.hypot(dx, dy);
+
+  if (!Number.isFinite(distance) || distance < 0.0001) {
+    const fallbackAngle = Number.isFinite(child.angle)
+      ? child.angle
+      : Number.isFinite(parent.angle)
+        ? parent.angle
+        : 0;
+    dx = Math.cos(fallbackAngle) * spacing;
+    dy = Math.sin(fallbackAngle) * spacing;
+    distance = spacing || 0.0001;
+  }
+
+  const correctionScale = ((distance - spacing) / distance) * stiffness;
+  const correctionX = dx * correctionScale;
+  const correctionY = dy * correctionScale;
+  const childShare = parent.movable ? 1 - parentShare : 1;
+
+  if (parent.movable) {
+    parent.x += correctionX * parentShare;
+    parent.y += correctionY * parentShare;
+    if (Number.isFinite(parent.vx)) {
+      parent.vx += correctionX * parentShare * 0.16;
+    }
+    if (Number.isFinite(parent.vy)) {
+      parent.vy += correctionY * parentShare * 0.16;
+    }
+  }
+
+  child.x -= correctionX * childShare;
+  child.y -= correctionY * childShare;
+  if (Number.isFinite(child.vx)) {
+    child.vx -= correctionX * childShare * 0.16;
+  }
+  if (Number.isFinite(child.vy)) {
+    child.vy -= correctionY * childShare * 0.16;
+  }
+}
+
+function spreadSegmentImpulse(creature, sourceIndex, dx, dy, velocityScale = 0.16) {
+  if (!creature.segmentBodies.length || sourceIndex < 0) {
+    return;
+  }
+
+  for (let offset = 1; offset <= 2; offset += 1) {
+    const influence = Math.pow(CONFIG.segmentImpactSpread, offset) * 0.34;
+    if (influence < 0.04) {
+      continue;
+    }
+
+    const leftIndex = sourceIndex - offset;
+    const rightIndex = sourceIndex + offset;
+
+    if (leftIndex >= 0) {
+      const segment = creature.segmentBodies[leftIndex];
+      segment.x += dx * influence;
+      segment.y += dy * influence;
+      segment.vx += dx * velocityScale * influence;
+      segment.vy += dy * velocityScale * influence;
+    }
+
+    if (rightIndex < creature.segmentBodies.length) {
+      const segment = creature.segmentBodies[rightIndex];
+      segment.x += dx * influence;
+      segment.y += dy * influence;
+      segment.vx += dx * velocityScale * influence;
+      segment.vy += dy * velocityScale * influence;
+    }
   }
 }
 
@@ -2097,71 +2344,126 @@ function relaxCreatureSegments(creature, iterations = 1) {
     ? clamp(creature.displayTurnVelocity / CONFIG.maxTurnSpeed, -1, 1)
     : 0;
 
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    const anchor = bodyLocalToWorld(
-      creature,
-      bodyMetrics,
-      bodyMetrics.tailAnchorLocal.x,
-      bodyMetrics.tailAnchorLocal.y
-    );
-    let parentX = anchor.x;
-    let parentY = anchor.y;
-    let parentAngle = creature.heading;
+  const anchor = bodyLocalToWorld(
+    creature,
+    bodyMetrics,
+    bodyMetrics.tailAnchorLocal.x,
+    bodyMetrics.tailAnchorLocal.y
+  );
+
+  let parentX = anchor.x;
+  let parentY = anchor.y;
+  let parentAngle = creature.heading;
+  let parentVX = creature.vx;
+  let parentVY = creature.vy;
+
+  for (let i = 0; i < adultCount; i += 1) {
+    const segment = creature.segmentBodies[i];
+    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+    const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+    const anchorX = parentX - Math.cos(parentAngle) * spacing;
+    const anchorY = parentY - Math.sin(parentAngle) * spacing;
+    const leaderPull = CONFIG.segmentFollowStiffness * (0.92 - progress * 0.18);
+    const inheritedVelocity = 0.08 + (1 - progress) * 0.06;
+    const turnBias = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.08 + progress * 0.12);
+
+    segment.vx =
+      segment.vx * CONFIG.segmentVelocityDamping +
+      (anchorX - segment.x) * leaderPull +
+      parentVX * inheritedVelocity +
+      -Math.sin(parentAngle) * turnBias * 0.12;
+    segment.vy =
+      segment.vy * CONFIG.segmentVelocityDamping +
+      (anchorY - segment.y) * leaderPull +
+      parentVY * inheritedVelocity +
+      Math.cos(parentAngle) * turnBias * 0.12;
+
+    const segmentSpeed = Math.hypot(segment.vx, segment.vy);
+    if (segmentSpeed > CONFIG.segmentMaxSpeed) {
+      const scale = CONFIG.segmentMaxSpeed / segmentSpeed;
+      segment.vx *= scale;
+      segment.vy *= scale;
+    }
+
+    segment.x += segment.vx;
+    segment.y += segment.vy;
+
+    parentX = segment.x;
+    parentY = segment.y;
+    parentAngle = segment.angle;
+    parentVX = segment.vx;
+    parentVY = segment.vy;
+  }
+
+  const passes = Math.max(2, iterations * 2 + 1);
+  for (let pass = 0; pass < passes; pass += 1) {
+    let leader = {
+      x: anchor.x,
+      y: anchor.y,
+      vx: creature.vx,
+      vy: creature.vy,
+      angle: creature.heading,
+      movable: false
+    };
 
     for (let i = 0; i < adultCount; i += 1) {
-      const segment = creature.segmentBodies[i];
       const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
       const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
-      const stiffness = CONFIG.segmentFollowStiffness * (0.98 - progress * 0.28);
-      const anchorX = parentX - Math.cos(parentAngle) * spacing;
-      const anchorY = parentY - Math.sin(parentAngle) * spacing;
-
-      segment.vx = (segment.vx + (anchorX - segment.x) * stiffness) * CONFIG.segmentVelocityDamping;
-      segment.vy = (segment.vy + (anchorY - segment.y) * stiffness) * CONFIG.segmentVelocityDamping;
-      const segmentSpeed = Math.hypot(segment.vx, segment.vy);
-      if (segmentSpeed > CONFIG.segmentMaxSpeed) {
-        const scale = CONFIG.segmentMaxSpeed / segmentSpeed;
-        segment.vx *= scale;
-        segment.vy *= scale;
-      }
-      segment.x += segment.vx;
-      segment.y += segment.vy;
-
-      const dx = parentX - segment.x;
-      const dy = parentY - segment.y;
-      const distance = Math.hypot(dx, dy) || 0.0001;
-      const correction =
-        (distance - spacing) *
-        (CONFIG.segmentConstraintPull * (0.94 - progress * 0.16));
-      segment.x += (dx / distance) * correction;
-      segment.y += (dy / distance) * correction;
-
-      const chainAngle = Math.atan2(parentY - segment.y, parentX - segment.x);
-      segment.angle = dampAngle(
-        segment.angle,
-        chainAngle,
-        CONFIG.segmentAngleFollow * (0.94 - progress * 0.14) + Math.abs(normalizedTurn) * 0.045
-      );
-      segment.angle = dampAngle(
-        segment.angle,
-        parentAngle,
-        CONFIG.segmentAngleCarry * (0.82 - progress * 0.26)
-      );
-
-      const maxBend = 0.28 +
-        Math.abs(normalizedTurn) *
-        CONFIG.segmentTurnCurlStrength *
-        (0.14 + progress * 0.13);
-      segment.angle = parentAngle + clamp(
-        normalizeAngle(segment.angle - parentAngle),
-        -maxBend,
-        maxBend
-      );
-
-      parentX = segment.x;
-      parentY = segment.y;
-      parentAngle = segment.angle;
+      const stiffness = CONFIG.segmentConstraintPull * (0.92 - progress * 0.18);
+      const segment = creature.segmentBodies[i];
+      segment.movable = true;
+      solveSegmentConstraint(leader, segment, spacing, stiffness, i === 0 ? 0 : 0.4);
+      leader = segment;
     }
+
+    for (let i = adultCount - 1; i >= 1; i -= 1) {
+      const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+      const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+      solveSegmentConstraint(
+        creature.segmentBodies[i - 1],
+        creature.segmentBodies[i],
+        spacing,
+        CONFIG.segmentConstraintPull * 0.56 * (0.96 - progress * 0.12),
+        0.5
+      );
+    }
+  }
+
+  parentX = anchor.x;
+  parentY = anchor.y;
+  parentAngle = creature.heading;
+
+  for (let i = 0; i < adultCount; i += 1) {
+    const segment = creature.segmentBodies[i];
+    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+    const chainAngle = Math.atan2(parentY - segment.y, parentX - segment.x);
+    const anglePull =
+      normalizeAngle(chainAngle - segment.angle) * (CONFIG.segmentAngleFollow * (1 - progress * 0.18));
+    const carryPull =
+      normalizeAngle(parentAngle - segment.angle) * (CONFIG.segmentAngleCarry * (0.9 - progress * 0.18));
+    const turnImpulse = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.02 + progress * 0.045);
+
+    segment.angularVelocity =
+      (segment.angularVelocity + anglePull + carryPull + turnImpulse) * CONFIG.segmentAngularDamping;
+    segment.angularVelocity = clamp(
+      segment.angularVelocity,
+      -CONFIG.segmentMaxAngularSpeed,
+      CONFIG.segmentMaxAngularSpeed
+    );
+    segment.angle = normalizeAngle(segment.angle + segment.angularVelocity);
+    segment.angle = dampAngle(segment.angle, chainAngle, 0.22 + progress * 0.05);
+
+    const maxBend = 1.15 + progress * 0.35;
+    segment.angle = parentAngle + clamp(
+      normalizeAngle(segment.angle - parentAngle),
+      -maxBend,
+      maxBend
+    );
+
+    parentX = segment.x;
+    parentY = segment.y;
+    parentAngle = segment.angle;
+    delete segment.movable;
   }
 }
 
@@ -2181,6 +2483,7 @@ function buildCreatureCollisionBodies(creature, bodyMetrics) {
     bodies.push({
       type: "segment",
       creature,
+      segmentIndex: i,
       segment,
       segmentState: creature.segmentBodies[i],
       x: segment.x,
@@ -2212,6 +2515,7 @@ function applyCollisionDisplacement(body, dx, dy, velocityScale = 0.16) {
   body.segmentState.y += dy;
   body.segmentState.vx += dx * velocityScale;
   body.segmentState.vy += dy * velocityScale;
+  spreadSegmentImpulse(body.creature, body.segmentIndex, dx, dy, velocityScale * 1.15);
   body.creature.vx += dx * CONFIG.segmentCollisionTransfer;
   body.creature.vy += dy * CONFIG.segmentCollisionTransfer;
 }
@@ -2278,6 +2582,7 @@ function resolveCreatureWallCollisions(creature) {
       if (pushY !== 0) {
         body.segmentState.vy = -body.segmentState.vy * CONFIG.segmentWallBounce;
       }
+      spreadSegmentImpulse(creature, body.segmentIndex, pushX * 0.75, pushY * 0.75, 0.12);
     }
   }
 
@@ -3542,8 +3847,8 @@ function drawMutationTelemetry(ctx, summary, x, bottomY, intensity) {
     return;
   }
 
-  const boxWidth = 76;
-  const boxHeight = 20;
+  const boxWidth = 124;
+  const boxHeight = 36;
   const boxX = x - boxWidth * 0.5;
   const boxY = bottomY - boxHeight;
   const alpha = clamp(0.22 + intensity * 0.72, 0.22, 0.94);
@@ -3557,11 +3862,11 @@ function drawMutationTelemetry(ctx, summary, x, bottomY, intensity) {
   ctx.fillStyle = `rgba(255, 241, 123, ${0.46 + intensity * 0.36})`;
   ctx.fillRect(boxX + 2, boxY + 2, boxWidth - 4, 1);
   ctx.textAlign = "center";
-  ctx.font = "7px Courier New";
+  ctx.font = CANVAS_FONTS.body;
   ctx.fillStyle = `rgba(255, 241, 123, ${0.7 + intensity * 0.22})`;
-  ctx.fillText(`DW ${summary.changedWeights}  DB ${summary.changedBiases}`, x, boxY + 8);
+  ctx.fillText(`DW ${summary.changedWeights}  DB ${summary.changedBiases}`, x, boxY + 14);
   ctx.fillStyle = `rgba(255, 164, 208, ${0.62 + intensity * 0.28})`;
-  ctx.fillText(`MAX ${summary.maxDelta.toFixed(2)}`, x, boxY + 16);
+  ctx.fillText(`MAX ${summary.maxDelta.toFixed(2)}`, x, boxY + 28);
   ctx.restore();
 }
 
@@ -3575,8 +3880,8 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
   }
 
   const lines = [];
-  const weightHighlights = summary.weightHighlights.slice(0, 4);
-  const biasHighlights = summary.biasHighlights.slice(0, 3);
+  const weightHighlights = summary.weightHighlights.slice(0, 3);
+  const biasHighlights = summary.biasHighlights.slice(0, 2);
 
   for (let i = 0; i < weightHighlights.length; i += 1) {
     const highlight = weightHighlights[i];
@@ -3594,8 +3899,8 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
     });
   }
 
-  const lineHeight = 7;
-  const boxHeight = 11 + lines.length * lineHeight;
+  const lineHeight = 12;
+  const boxHeight = 18 + lines.length * lineHeight;
   const boxX = centerX - width * 0.5;
 
   ctx.save();
@@ -3607,18 +3912,18 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
   ctx.fillStyle = `rgba(255, 241, 123, ${0.54 + intensity * 0.22})`;
   ctx.fillRect(boxX + 2, topY + 2, width - 4, 1);
 
-  ctx.font = "6px Courier New";
+  ctx.font = CANVAS_FONTS.body;
   ctx.textAlign = "left";
   ctx.fillStyle = `rgba(221, 250, 255, ${0.72 + intensity * 0.18})`;
-  ctx.fillText("STITCH MAP // PASSED NEURONS + LIVE MUTATIONS", boxX + 6, topY + 8);
+  ctx.fillText("STITCH MAP // PASSED NEURONS + LIVE MUTATIONS", boxX + 8, topY + 13);
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    const lineY = topY + 15 + i * lineHeight;
+    const lineY = topY + 28 + i * lineHeight;
     ctx.fillStyle = `rgba(${line.color}, ${0.24 + intensity * 0.42})`;
-    ctx.fillRect(boxX + 6, lineY - 4, 4, 4);
+    ctx.fillRect(boxX + 8, lineY - 5, 5, 5);
     ctx.fillStyle = `rgba(221, 250, 255, ${0.64 + intensity * 0.18})`;
-    ctx.fillText(line.text, boxX + 14, lineY);
+    ctx.fillText(line.text, boxX + 18, lineY);
   }
 
   ctx.restore();
@@ -3651,7 +3956,7 @@ function drawBrainStitching(
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   ctx.lineWidth = 1;
-  ctx.font = "6px Courier New";
+  ctx.font = CANVAS_FONTS.body;
   ctx.textAlign = "center";
 
   for (let i = 0; i < stitchHighlights.length; i += 1) {
@@ -3773,14 +4078,14 @@ function drawBrainStitching(
     }
 
     ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
-    ctx.fillRect(sourceFrom.x - 5, sourceFrom.y - 10, 10, 6);
-    ctx.fillRect(targetTo.x - 5, targetTo.y - 10, 10, 6);
+    ctx.fillRect(sourceFrom.x - 8, sourceFrom.y - 12, 16, 8);
+    ctx.fillRect(targetTo.x - 8, targetTo.y - 12, 16, 8);
     ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.24})`;
-    ctx.fillText(tag, sourceFrom.x, sourceFrom.y - 5);
+    ctx.fillText(tag, sourceFrom.x, sourceFrom.y - 6);
     ctx.fillStyle = positive
       ? `rgba(74, 255, 212, ${0.58 + intensity * 0.24})`
       : `rgba(255, 109, 179, ${0.58 + intensity * 0.24})`;
-    ctx.fillText(tag, targetTo.x, targetTo.y - 5);
+    ctx.fillText(tag, targetTo.x, targetTo.y - 6);
   }
 
   for (let i = 0; i < biasHighlights.length; i += 1) {
@@ -3825,14 +4130,14 @@ function drawBrainStitching(
       : `rgba(255, 109, 179, ${0.18 + intensity * 0.2 + normalized * 0.18})`;
     ctx.fillRect(targetNode.x - 3, targetNode.y - 3, 6, 6);
     ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
-    ctx.fillRect(sourceNode.x - 6, sourceNode.y - 10, 12, 6);
-    ctx.fillRect(targetNode.x - 6, targetNode.y - 10, 12, 6);
+    ctx.fillRect(sourceNode.x - 8, sourceNode.y - 12, 16, 8);
+    ctx.fillRect(targetNode.x - 8, targetNode.y - 12, 16, 8);
     ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.22})`;
-    ctx.fillText(tag, sourceNode.x, sourceNode.y - 5);
+    ctx.fillText(tag, sourceNode.x, sourceNode.y - 6);
     ctx.fillStyle = positive
       ? `rgba(74, 255, 212, ${0.56 + intensity * 0.24})`
       : `rgba(255, 109, 179, ${0.56 + intensity * 0.24})`;
-    ctx.fillText(tag, targetNode.x, targetNode.y - 5);
+    ctx.fillText(tag, targetNode.x, targetNode.y - 6);
   }
 
   ctx.restore();
@@ -3954,11 +4259,11 @@ function drawIncubationEgg(ctx, plan, planState, x, y, isActive, flashPulse, lab
 
   ctx.shadowBlur = 0;
   ctx.textAlign = "center";
-  ctx.font = "7px Courier New";
+  ctx.font = CANVAS_FONTS.body;
   ctx.fillStyle = `rgba(${accent}, ${0.44 + (isActive ? 0.28 : 0.12)})`;
-  ctx.fillText(plan.inherited ? "DNA" : "RND", x, y + 4);
+  ctx.fillText(plan.inherited ? "DNA" : "RND", x, y + 5);
   ctx.fillStyle = `rgba(221, 250, 255, ${0.56 + (isActive ? 0.24 : 0.1)})`;
-  ctx.fillText(label, x, y + 39);
+  ctx.fillText(label, x, y + 41);
   ctx.restore();
 }
 
@@ -4177,7 +4482,7 @@ function drawSpecimenHeadScanPanel(ctx, specimen, brain, x, y, width, height, sc
   ctx.fillStyle = `rgba(102, 220, 255, ${0.1 + pulse * 0.06})`;
   ctx.fillRect(insetX + 2, insetY + 2, insetW - 4, 1);
   ctx.fillStyle = `rgba(221, 250, 255, ${0.72 + pulse * 0.12})`;
-  ctx.font = "8px Courier New";
+  ctx.font = CANVAS_FONTS.small;
   ctx.textAlign = "center";
   ctx.fillText(
     !scanActive
@@ -4280,7 +4585,7 @@ function drawSpecimenHeadScanPanel(ctx, specimen, brain, x, y, width, height, sc
     ctx.restore();
   } else {
     ctx.fillStyle = "rgba(221, 250, 255, 0.44)";
-    ctx.font = "8px Courier New";
+    ctx.font = CANVAS_FONTS.small;
     ctx.fillText("WAITING FOR CONTAINMENT LOCK", x + width * 0.5, insetY + insetH * 0.54);
   }
 
@@ -4556,12 +4861,12 @@ function drawExtinctionScene() {
   worldCtx.fillStyle = `rgba(74, 255, 212, ${0.08 + sceneProgress * 0.1})`;
   worldCtx.fillRect(overlayX + 22, overlayY + 74, (overlayW - 44) * sceneProgress, 3);
   worldCtx.fillStyle = "#ddfaff";
-  worldCtx.font = "16px Courier New";
+  worldCtx.font = CANVAS_FONTS.title;
   worldCtx.shadowBlur = 5 + forgePulse * 6;
   worldCtx.shadowColor = `rgba(102, 220, 255, ${0.14 + forgePulse * 0.18})`;
   worldCtx.fillText("EXTINCTION GENE FOUNDRY", overlayX + 22, overlayY + 28);
   worldCtx.shadowBlur = 0;
-  worldCtx.font = "12px Courier New";
+  worldCtx.font = CANVAS_FONTS.section;
   worldCtx.fillStyle = `rgba(139, 191, 202, ${0.82 + forgePulse * 0.16})`;
   worldCtx.fillText(phaseLabel, overlayX + 22, overlayY + 48);
   worldCtx.fillText(detailLabel, overlayX + 22, overlayY + 64);
@@ -4590,7 +4895,7 @@ function drawExtinctionScene() {
     worldCtx.strokeRect(specimenX - 10, specimenY - 12, specimenW + 20, specimenH + 24);
     worldCtx.shadowBlur = 0;
     worldCtx.fillStyle = "#8ed7ff";
-    worldCtx.font = "12px Courier New";
+    worldCtx.font = CANVAS_FONTS.section;
     worldCtx.textAlign = "center";
     worldCtx.fillText("SPECIMEN LOCK", specimenCenterX, specimenY - 18);
     worldCtx.textAlign = "left";
@@ -4613,7 +4918,7 @@ function drawExtinctionScene() {
     worldCtx.strokeRect(winnerX - 10, winnerY - 12, winnerW + 20, winnerH + 24);
     worldCtx.shadowBlur = 0;
     worldCtx.fillStyle = "#fff17b";
-    worldCtx.font = "12px Courier New";
+    worldCtx.font = CANVAS_FONTS.section;
     worldCtx.textAlign = "center";
     worldCtx.fillText(`WINNER BRAIN G${scene.sourceGeneration}`, winnerCenterX, winnerY - 18);
     worldCtx.fillStyle = winnerBrainActivation > 0.98
@@ -4671,7 +4976,7 @@ function drawExtinctionScene() {
       flashPulse
     );
 
-    worldCtx.font = "8px Courier New";
+    worldCtx.font = CANVAS_FONTS.small;
     worldCtx.fillStyle = `rgba(221, 250, 255, ${0.6 + sourceSpecimenPullProgress * 0.16})`;
     worldCtx.textAlign = "center";
     worldCtx.fillText("HOLLOW CONTAINMENT CELL", specimenCenterX, containmentBoxY - 8);
@@ -4726,7 +5031,7 @@ function drawExtinctionScene() {
     if (winnerBrainActivation < 0.99) {
       worldCtx.fillStyle = "rgba(4, 12, 20, 0.44)";
       worldCtx.fillRect(winnerX, winnerY, winnerW, winnerH);
-      worldCtx.font = "11px Courier New";
+      worldCtx.font = CANVAS_FONTS.body;
       worldCtx.fillStyle = "rgba(221, 250, 255, 0.68)";
       worldCtx.textAlign = "center";
       worldCtx.fillText("NEURAL MAP HELD STATIC", winnerCenterX, winnerY + winnerH * 0.48);
@@ -4755,7 +5060,7 @@ function drawExtinctionScene() {
   worldCtx.shadowBlur = 0;
   worldCtx.fillStyle = `rgba(102, 220, 255, ${0.08 + forgePulse * 0.08})`;
   worldCtx.fillRect(forgeX - 8, forgeY - 12, forgeW + 16, 4);
-  worldCtx.font = "11px Courier New";
+  worldCtx.font = CANVAS_FONTS.section;
   worldCtx.fillStyle = activePlan
     ? activePlan.inherited
       ? "#fff17b"
@@ -4829,7 +5134,7 @@ function drawExtinctionScene() {
       const stitchY = forgeY + 34;
       const ledgerTop = forgeY + forgeH - 64;
 
-      worldCtx.font = "8px Courier New";
+      worldCtx.font = CANVAS_FONTS.body;
       worldCtx.textAlign = "center";
       worldCtx.fillStyle = "rgba(255, 241, 123, 0.84)";
       worldCtx.fillText("SOURCE", stitchSourceX + stitchSourceW * 0.5, stitchY - 8);
@@ -4943,7 +5248,7 @@ function drawExtinctionScene() {
     }
     worldCtx.restore();
   } else {
-    worldCtx.font = "12px Courier New";
+    worldCtx.font = CANVAS_FONTS.section;
     worldCtx.fillStyle = "#8bbfca";
     worldCtx.textAlign = "center";
     worldCtx.fillText(
@@ -5246,8 +5551,9 @@ function drawSegmentedBody(layout, creature, bodyColor, bodyShadow) {
 
 function drawEggCreature(creature, isFeatured) {
   const pulse = 1 + Math.sin(creature.movePhase * 0.6) * 0.05;
-  const eggWidth = Math.round(14 * pulse);
-  const eggHeight = Math.round(18 * pulse);
+  const radiusScale = (creature.radius || CONFIG.creatureRadius) / 10;
+  const eggWidth = Math.round(14 * radiusScale * pulse);
+  const eggHeight = Math.round(18 * radiusScale * pulse);
   const crackProgress = 1 - clamp(creature.eggTimer / CONFIG.eggHatchFrames, 0, 1);
   const shellColor = `hsl(${creature.hue} 48% 84%)`;
   const shellShadow = `hsla(${creature.hue} 60% 72% / 0.35)`;
@@ -5407,7 +5713,7 @@ function drawWorldHud() {
   worldCtx.strokeStyle = "rgba(102, 220, 255, 0.18)";
   worldCtx.strokeRect(16.5, 16.5, 223, 61);
 
-  worldCtx.font = "14px Courier New";
+  worldCtx.font = CANVAS_FONTS.section;
   worldCtx.fillStyle = "#ddfaff";
   for (let i = 0; i < textLines.length; i += 1) {
     worldCtx.fillText(textLines[i], 28, 36 + i * 18);
@@ -5478,9 +5784,9 @@ function drawStartupScene() {
   }
 
   worldCtx.fillStyle = "#ddfaff";
-  worldCtx.font = "18px Courier New";
+  worldCtx.font = CANVAS_FONTS.hero;
   worldCtx.fillText("HABITAT BOOT SEQUENCE", chamberX + 20, chamberY + 28);
-  worldCtx.font = "12px Courier New";
+  worldCtx.font = CANVAS_FONTS.section;
   worldCtx.fillStyle = `rgba(157, 231, 255, ${0.7 + overlayStrength * 0.18})`;
   worldCtx.fillText(stageLabel, chamberX + 20, chamberY + 48);
   worldCtx.fillText("GENE LAB // CLOSED ECOSYSTEM // PIXEL BIOSPHERE", chamberX + 20, chamberY + 64);
@@ -5503,7 +5809,7 @@ function drawStartupScene() {
   worldCtx.strokeRect(leftPanelX, panelY, panelW, panelH);
   worldCtx.strokeRect(rightPanelX, panelY, panelW, panelH);
 
-  worldCtx.font = "11px Courier New";
+  worldCtx.font = CANVAS_FONTS.body;
   worldCtx.fillStyle = "#fff17b";
   worldCtx.fillText("BOOT READOUT", leftPanelX + 10, panelY + 16);
   worldCtx.fillText("SEED TARGETS", rightPanelX + 10, panelY + 16);
@@ -5674,9 +5980,9 @@ function drawBrainBankScene() {
   }
 
   worldCtx.fillStyle = "#ddfaff";
-  worldCtx.font = "16px Courier New";
+  worldCtx.font = CANVAS_FONTS.title;
   worldCtx.fillText("LONGEVITY BRAIN BANK", overlayX + 22, overlayY + 28);
-  worldCtx.font = "12px Courier New";
+  worldCtx.font = CANVAS_FONTS.section;
   worldCtx.fillStyle = `rgba(139, 191, 202, ${0.8 + pulse * 0.16})`;
   worldCtx.fillText(phaseLabel, overlayX + 22, overlayY + 48);
   worldCtx.fillText(detailLabel, overlayX + 22, overlayY + 64);
@@ -5696,7 +6002,7 @@ function drawBrainBankScene() {
     worldCtx.lineWidth = 1;
     worldCtx.strokeRect(panel.x, panel.y, panel.w, panel.h);
     worldCtx.fillStyle = "rgba(255, 241, 123, 0.72)";
-    worldCtx.font = "10px Courier New";
+    worldCtx.font = CANVAS_FONTS.body;
     worldCtx.fillText(panel.title, panel.x + 10, panel.y + 16);
   }
 
@@ -5737,7 +6043,7 @@ function drawBrainBankScene() {
   );
 
   worldCtx.fillStyle = `rgba(221, 250, 255, ${0.66 + captureProgress * 0.2})`;
-  worldCtx.font = "10px Courier New";
+  worldCtx.font = CANVAS_FONTS.body;
   worldCtx.fillText(`AGE ${formatAge(scene.specimen.age)}`, leftX + 12, leftY + leftH - 20);
   worldCtx.fillText(`SEGMENTS ${clampSegmentGene(scene.specimen.segmentGene)}`, leftX + leftW - 112, leftY + leftH - 20);
 
@@ -5764,7 +6070,7 @@ function drawBrainBankScene() {
   worldCtx.fillStyle = `rgba(255, 241, 123, ${0.18 + packageProgress * 0.32})`;
   worldCtx.fillRect(middleX + 12, middleY + middleH - 36, (middleW - 24) * Math.max(scanProgress, packageProgress), 8);
   worldCtx.fillStyle = `rgba(221, 250, 255, ${0.68 + packageProgress * 0.18})`;
-  worldCtx.font = "9px Courier New";
+  worldCtx.font = CANVAS_FONTS.small;
   worldCtx.fillText("VAULT COMPRESSION", middleX + 12, middleY + middleH - 44);
 
   for (let slot = 0; slot < 3; slot += 1) {
@@ -5842,7 +6148,7 @@ function drawBrainBankScene() {
   }
 
   worldCtx.fillStyle = `rgba(221, 250, 255, ${0.64 + vaultProgress * 0.2})`;
-  worldCtx.font = "10px Courier New";
+  worldCtx.font = CANVAS_FONTS.body;
   worldCtx.fillText(`WRITE ${Math.round((0.08 + packageProgress * 0.26 + transferProgress * 0.3 + vaultProgress * 0.36) * 100)}%`, rightX + 12, rightY + rightH - 26);
   worldCtx.fillText(`CLONE FILE READY ${vaultProgress > 0.96 ? "YES" : "SYNC"}`, rightX + rightW - 150, rightY + rightH - 26);
   worldCtx.restore();
@@ -5890,9 +6196,9 @@ function drawTelemetrySeries(metric, samples, x, y, width, height, index) {
   const latest = samples.length > 0 ? samples[samples.length - 1][metric.key] : 0;
   const maxValue = Math.max(1, metric.maxValue(samples));
   const graphX = x + 12;
-  const graphY = y + 36;
+  const graphY = y + 40;
   const graphW = width - 24;
-  const graphH = height - 52;
+  const graphH = height - 58;
   const tint = hexToRgba(metric.color, 0.08);
   const lineColor = metric.color;
 
@@ -5907,16 +6213,16 @@ function drawTelemetrySeries(metric, samples, x, y, width, height, index) {
   telemetryCtx.fillStyle = lineColor;
   telemetryCtx.fillRect(x + 1, y + 1, 4, height - 2);
 
-  telemetryCtx.font = "15px Courier New";
+  telemetryCtx.font = CANVAS_FONTS.title;
   telemetryCtx.textAlign = "left";
   telemetryCtx.fillStyle = "#ddfaff";
-  telemetryCtx.fillText(metric.label, x + 14, y + 18);
+  telemetryCtx.fillText(metric.label, x + 14, y + 20);
   telemetryCtx.textAlign = "right";
   telemetryCtx.fillStyle = lineColor;
-  telemetryCtx.fillText(metric.formatValue(latest), x + width - 14, y + 18);
-  telemetryCtx.font = "10px Courier New";
+  telemetryCtx.fillText(metric.formatValue(latest), x + width - 14, y + 20);
+  telemetryCtx.font = CANVAS_FONTS.body;
   telemetryCtx.fillStyle = "rgba(221, 250, 255, 0.6)";
-  telemetryCtx.fillText(metric.formatScale(maxValue), x + width - 14, y + 31);
+  telemetryCtx.fillText(metric.formatScale(maxValue), x + width - 14, y + 34);
   telemetryCtx.textAlign = "left";
 
   for (let guide = 0; guide <= 3; guide += 1) {
@@ -5987,14 +6293,14 @@ function drawTelemetryPanel() {
   const samples = state.telemetryHistory;
   if (samples.length === 0) {
     telemetryCtx.fillStyle = "#8bbfca";
-    telemetryCtx.font = "18px Courier New";
+    telemetryCtx.font = CANVAS_FONTS.hero;
     telemetryCtx.fillText("NO TELEMETRY", 88, 180);
     return;
   }
 
   const marginX = 14;
-  const marginTop = 14;
-  const marginBottom = 18;
+  const marginTop = 16;
+  const marginBottom = 24;
   const gap = 12;
   const sectionHeight =
     (telemetryCanvas.height - marginTop - marginBottom - gap * (TELEMETRY_SERIES.length - 1)) /
@@ -6013,7 +6319,7 @@ function drawTelemetryPanel() {
   }
 
   telemetryCtx.fillStyle = "rgba(221, 250, 255, 0.62)";
-  telemetryCtx.font = "10px Courier New";
+  telemetryCtx.font = CANVAS_FONTS.body;
   telemetryCtx.textAlign = "center";
   telemetryCtx.fillText(
     `ROLLING ${Math.round((TELEMETRY_HISTORY_LIMIT * TELEMETRY_SAMPLE_INTERVAL) / 60)}S WINDOW`,
@@ -6160,6 +6466,10 @@ function drawConnections(fromNodes, toNodes, weights, glows) {
 }
 
 function drawLayerNodes(nodes, values, labels, colors, labelAlign) {
+  const nodeRadius = 9;
+  const labelOffset = labelAlign === "outside-right" || labelAlign === "outside-left" ? 24 : 18;
+  const labelFont = labelAlign === "center" ? CANVAS_FONTS.small : CANVAS_FONTS.body;
+
   for (let i = 0; i < nodes.length; i += 1) {
     const node = nodes[i];
     const value = values[i] || 0;
@@ -6168,36 +6478,36 @@ function drawLayerNodes(nodes, values, labels, colors, labelAlign) {
 
     networkCtx.beginPath();
     networkCtx.fillStyle = "rgba(3, 11, 17, 0.96)";
-    networkCtx.arc(node.x, node.y, 10, 0, TAU);
+    networkCtx.arc(node.x, node.y, nodeRadius, 0, TAU);
     networkCtx.fill();
 
     networkCtx.beginPath();
     networkCtx.fillStyle = color;
     networkCtx.shadowBlur = 16;
     networkCtx.shadowColor = color;
-    networkCtx.arc(node.x, node.y, 3 + strength * 6, 0, TAU);
+    networkCtx.arc(node.x, node.y, 3 + strength * 5.4, 0, TAU);
     networkCtx.fill();
     networkCtx.shadowBlur = 0;
 
     networkCtx.beginPath();
     networkCtx.strokeStyle = hexToRgba(color, 0.4 + strength * 0.6);
     networkCtx.lineWidth = 2;
-    networkCtx.arc(node.x, node.y, 10, 0, TAU);
+    networkCtx.arc(node.x, node.y, nodeRadius, 0, TAU);
     networkCtx.stroke();
 
-    networkCtx.font = "9px Courier New";
+    networkCtx.font = labelFont;
     networkCtx.fillStyle = "#ddfaff";
     const label = labels[i];
     if (label) {
       if (labelAlign === "outside-right") {
         networkCtx.textAlign = "left";
-        networkCtx.fillText(label, node.x + 18, node.y + 3);
+        networkCtx.fillText(label, node.x + labelOffset, node.y + 4);
       } else if (labelAlign === "outside-left") {
         networkCtx.textAlign = "right";
-        networkCtx.fillText(label, node.x - 18, node.y + 3);
+        networkCtx.fillText(label, node.x - labelOffset, node.y + 4);
       } else {
         networkCtx.textAlign = "center";
-        networkCtx.fillText(label, node.x, node.y - 16);
+        networkCtx.fillText(label, node.x, node.y - 18);
       }
     }
   }
@@ -6282,9 +6592,9 @@ function drawNetworkPanel() {
   if (state.startupScene) {
     const progress = clamp(state.startupScene.frame / Math.max(1, state.startupScene.totalFrames), 0, 1);
     networkCtx.fillStyle = "#ddfaff";
-    networkCtx.font = "16px Courier New";
+    networkCtx.font = CANVAS_FONTS.title;
     networkCtx.fillText("GENE LAB BOOTING", 112, 188);
-    networkCtx.font = "12px Courier New";
+    networkCtx.font = CANVAS_FONTS.section;
     networkCtx.fillStyle = "#8bbfca";
     networkCtx.fillText("NEURAL LINK WAITING", 114, 214);
     networkCtx.fillStyle = "rgba(74, 255, 212, 0.18)";
@@ -6297,8 +6607,9 @@ function drawNetworkPanel() {
 
   if (!state.featured || !state.featured.senses) {
     networkCtx.fillStyle = "#8bbfca";
-    networkCtx.font = "16px Courier New";
+    networkCtx.font = CANVAS_FONTS.title;
     networkCtx.fillText("NO ACTIVE CREATURE", 110, 190);
+    networkCtx.font = CANVAS_FONTS.section;
     networkCtx.fillText("WAITING FOR BIOSIGNAL", 88, 216);
     creatureDetails.innerHTML = '<p class="placeholder">The habitat is between lineages. A new population will reseed after extinction.</p>';
     return;
@@ -6316,19 +6627,19 @@ function drawNetworkPanel() {
     ...CONFIG.hiddenLayerSizes.map((_, index) => `H${index + 1}`),
     "OUTPUTS"
   ];
-  const xMargin = 96;
+  const xMargin = 128;
   const usableWidth = networkCanvas.width - xMargin * 2;
   const layerXs = layerNodeCounts.map((_, index) =>
     xMargin + (usableWidth * index) / (layerNodeCounts.length - 1)
   );
   const layerNodes = layerNodeCounts.map((count, index) => {
     if (index === 0) {
-      return buildLayerNodes(layerXs[index], 26, networkCanvas.height - 26, count);
+      return buildLayerNodes(layerXs[index], 34, networkCanvas.height - 34, count);
     }
     if (index === layerNodeCounts.length - 1) {
-      return buildLayerNodes(layerXs[index], 110, networkCanvas.height - 110, count);
+      return buildLayerNodes(layerXs[index], 118, networkCanvas.height - 118, count);
     }
-    return buildLayerNodes(layerXs[index], 46, networkCanvas.height - 46, count);
+    return buildLayerNodes(layerXs[index], 58, networkCanvas.height - 58, count);
   });
 
   for (let layerIndex = 0; layerIndex < featured.brain.weights.length; layerIndex += 1) {
@@ -6359,10 +6670,10 @@ function drawNetworkPanel() {
   );
 
   networkCtx.fillStyle = "#ddfaff";
-  networkCtx.font = "12px Courier New";
+  networkCtx.font = CANVAS_FONTS.section;
   networkCtx.textAlign = "center";
   for (let i = 0; i < layerNames.length; i += 1) {
-    networkCtx.fillText(layerNames[i], layerXs[i], 16);
+    networkCtx.fillText(layerNames[i], layerXs[i], 20);
   }
   networkCtx.textAlign = "left";
 
@@ -6420,6 +6731,11 @@ function frame(timestamp) {
 buildControlDeck();
 resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
+spawnTrophyWormButton.addEventListener("click", () => {
+  spawnTrophyWorm().catch(() => {
+    setBrainBankMessage("The built-in Trophy Worm could not be loaded from its bundled brain file.");
+  });
+});
 openBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(true));
 importBrainButton.addEventListener("click", () => brainBankFileInput.click());
 closeBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(false));
@@ -6467,6 +6783,10 @@ chooseFeaturedCreature();
 updateStats();
 renderSimulationPanels();
 requestAnimationFrame(frame);
+loadTrophyWormFromAsset().catch(() => {
+  state.trophyWormLoadState = "error";
+  updateBrainBankUi();
+});
 restoreBrainBankFromDiskOnStartup().catch(() => {
   setBrainBankMessage("Brain bank startup import failed. You can still sample and save new brains manually.");
 });

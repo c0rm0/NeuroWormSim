@@ -12,6 +12,12 @@
   --negative: #ff6db3;
   --focus: #fff17b;
   --shadow: 0 0 0 1px rgba(95, 235, 255, 0.16), 0 0 24px rgba(38, 125, 159, 0.24);
+  --ui-copy-size: clamp(0.94rem, 0.91rem + 0.18vw, 1rem);
+  --ui-heading-size: clamp(1.04rem, 0.98rem + 0.32vw, 1.22rem);
+  --ui-display-size: clamp(1.18rem, 1.06rem + 0.5vw, 1.5rem);
+  --panel-gap: clamp(12px, 0.9vw, 16px);
+  --panel-padding: clamp(14px, 1vw, 18px);
+  --sticky-offset: 10px;
 }
 
 * {
@@ -26,6 +32,8 @@ body {
 
 body {
   font-family: "Courier New", Courier, monospace;
+  font-size: var(--ui-copy-size);
+  line-height: 1.4;
   color: var(--text);
   background:
     radial-gradient(circle at top left, rgba(34, 104, 144, 0.28), transparent 28%),
@@ -56,9 +64,9 @@ body::after {
 }
 
 .app-shell {
-  width: min(1880px, calc(100vw - 8px));
+  width: min(1840px, calc(100vw - 16px));
   margin: 0 auto;
-  padding: 8px 0 16px;
+  padding: 10px 0 14px;
 }
 
 .panel {
@@ -81,22 +89,24 @@ body::after {
 
 .hud-bar {
   display: flex;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: var(--panel-gap);
   align-items: stretch;
   justify-content: space-between;
-  padding: 22px;
-  margin-bottom: 16px;
+  padding: calc(var(--panel-padding) + 2px);
+  margin-bottom: var(--panel-gap);
 }
 
 .branding {
-  max-width: 760px;
+  flex: 0 1 520px;
+  max-width: 620px;
 }
 
 .eyebrow {
   margin: 0 0 8px;
   color: var(--food);
-  font-size: 0.78rem;
-  letter-spacing: 0.2em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.12em;
   text-shadow: 0 0 10px rgba(128, 255, 136, 0.4);
 }
 
@@ -108,7 +118,7 @@ body::after {
 }
 
 .branding h1 {
-  font-size: clamp(1.4rem, 2vw, 2.3rem);
+  font-size: clamp(1.36rem, 1.1rem + 0.8vw, 1.92rem);
   text-shadow: 0 0 14px rgba(90, 224, 255, 0.35);
 }
 
@@ -125,17 +135,18 @@ body::after {
 }
 
 .status-strip {
+  flex: 1 1 820px;
   display: grid;
-  grid-template-columns: repeat(7, minmax(92px, 1fr));
-  gap: 12px;
-  width: min(1080px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  width: 100%;
 }
 
 .status-card {
   background: linear-gradient(180deg, rgba(20, 40, 61, 0.9), rgba(8, 18, 29, 0.95));
   border: 1px solid rgba(102, 220, 255, 0.25);
-  padding: 12px 14px;
-  min-height: 82px;
+  padding: 10px 12px;
+  min-height: 86px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -144,21 +155,22 @@ body::after {
 .status-label {
   color: var(--muted);
   text-transform: uppercase;
-  font-size: 0.74rem;
-  letter-spacing: 0.16em;
+  font-size: var(--ui-copy-size);
+  line-height: 1.25;
+  letter-spacing: 0.08em;
 }
 
 .status-card strong {
-  font-size: 1.65rem;
+  font-size: var(--ui-display-size);
   color: var(--focus);
   text-shadow: 0 0 10px rgba(255, 241, 123, 0.35);
 }
 
 .sim-layout {
   display: grid;
-  grid-template-columns: minmax(310px, 0.7fr) minmax(0, 2.18fr) minmax(400px, 0.82fr);
+  grid-template-columns: minmax(230px, 0.48fr) minmax(0, 2.35fr) minmax(300px, 0.68fr);
   grid-template-areas: "telemetry world side";
-  gap: 14px;
+  gap: var(--panel-gap);
   align-items: start;
 }
 
@@ -170,6 +182,13 @@ body::after {
   grid-area: world;
 }
 
+.telemetry-panel,
+.world-panel {
+  position: sticky;
+  top: var(--sticky-offset);
+  align-self: start;
+}
+
 .side-stack {
   grid-area: side;
 }
@@ -179,13 +198,23 @@ body::after {
 .network-panel,
 .legend-panel,
 .controls-panel {
-  padding: 18px;
+  padding: var(--panel-padding);
+}
+
+.world-panel {
+  padding: clamp(10px, 0.8vw, 14px);
 }
 
 .panel-heading {
   position: relative;
   z-index: 1;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-heading h2,
+.brain-bank-monitor-copy h2,
+.brain-bank-header h2 {
+  font-size: var(--ui-heading-size);
 }
 
 .panel-heading p {
@@ -199,7 +228,11 @@ body::after {
   background:
     linear-gradient(180deg, rgba(8, 20, 34, 0.92), rgba(2, 7, 12, 0.98)),
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 12px);
-  padding: 14px;
+  padding: 12px;
+}
+
+.world-panel .canvas-frame {
+  padding: 8px;
 }
 
 #telemetryCanvas,
@@ -227,7 +260,7 @@ body::after {
   border: 1px solid rgba(102, 220, 255, 0.16);
   background: rgba(9, 18, 29, 0.78);
   color: var(--text);
-  font-size: 0.82rem;
+  font-size: var(--ui-copy-size);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -270,10 +303,10 @@ body::after {
 .canvas-overlay span {
   background: rgba(4, 10, 17, 0.76);
   border: 1px solid rgba(102, 220, 255, 0.18);
-  padding: 4px 8px;
+  padding: 6px 10px;
   color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
 }
 
 canvas {
@@ -288,7 +321,7 @@ canvas {
 
 .side-stack {
   display: grid;
-  gap: 16px;
+  gap: var(--panel-gap);
 }
 
 .creature-details {
@@ -313,14 +346,14 @@ canvas {
 .detail-box span {
   display: block;
   color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
   margin-bottom: 6px;
 }
 
 .detail-box strong {
   color: var(--text);
-  font-size: 1rem;
+  font-size: var(--ui-copy-size);
 }
 
 .signal-readout {
@@ -330,10 +363,10 @@ canvas {
 
 .signal-line {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr) 50px;
+  grid-template-columns: 94px minmax(0, 1fr) 60px;
   align-items: center;
   gap: 8px;
-  font-size: 0.78rem;
+  font-size: var(--ui-copy-size);
 }
 
 .signal-line span,
@@ -350,11 +383,11 @@ canvas {
 }
 
 .memory-signal-line {
-  grid-template-columns: 82px minmax(0, 1fr) 126px;
+  grid-template-columns: 94px minmax(0, 1fr) 136px;
 }
 
 .memory-values {
-  min-width: 126px;
+  min-width: 136px;
   letter-spacing: 0.01em;
 }
 
@@ -390,6 +423,8 @@ canvas {
   border: 1px solid rgba(102, 220, 255, 0.14);
   background: rgba(9, 18, 29, 0.72);
   color: var(--muted);
+  font-size: var(--ui-copy-size);
+  line-height: 1.35;
 }
 
 .legend-swatch {
@@ -471,21 +506,21 @@ canvas {
 
 .control-top label {
   color: var(--text);
-  font-size: 0.82rem;
+  font-size: var(--ui-copy-size);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .control-value {
   color: var(--focus);
-  font-size: 0.82rem;
+  font-size: var(--ui-copy-size);
   text-shadow: 0 0 10px rgba(255, 241, 123, 0.24);
 }
 
 .control-meta {
   margin: 0 0 10px;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: var(--ui-copy-size);
   line-height: 1.35;
 }
 
@@ -537,7 +572,7 @@ canvas {
 
 .brain-bank-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 14px;
   position: relative;
@@ -552,7 +587,7 @@ canvas {
   border: 1px solid rgba(102, 220, 255, 0.14);
   background: rgba(9, 18, 29, 0.72);
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: var(--ui-copy-size);
   line-height: 1.45;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -605,15 +640,15 @@ canvas {
 }
 
 .brain-bank-shell {
-  width: min(1660px, calc(100vw - 36px));
+  width: min(1540px, calc(100vw - 28px));
   display: grid;
-  grid-template-columns: minmax(320px, 0.52fr) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(300px, 0.5fr) minmax(0, 1fr);
+  gap: var(--panel-gap);
   align-items: start;
 }
 
 .brain-bank-monitor {
-  padding: 18px;
+  padding: var(--panel-padding);
 }
 
 .brain-bank-monitor-copy {
@@ -665,15 +700,15 @@ canvas {
   border: 1px solid rgba(102, 220, 255, 0.14);
   background: rgba(4, 10, 17, 0.76);
   color: var(--muted);
-  font-size: 0.7rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   text-align: center;
 }
 
 .brain-bank-dialog {
   max-height: min(90vh, 940px);
-  padding: 22px;
+  padding: calc(var(--panel-padding) + 4px);
   overflow: auto;
 }
 
@@ -702,15 +737,15 @@ canvas {
 .brain-bank-header-actions {
   display: grid;
   gap: 10px;
-  width: min(240px, 100%);
+  width: min(280px, 100%);
 }
 
 .brain-bank-list {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: var(--panel-gap);
 }
 
 .brain-bank-card,
@@ -730,7 +765,7 @@ canvas {
 .brain-bank-card-title {
   margin: 0;
   color: var(--text);
-  font-size: 0.96rem;
+  font-size: var(--ui-heading-size);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -738,7 +773,7 @@ canvas {
 .brain-bank-card-copy {
   margin: 8px 0 0;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: var(--ui-copy-size);
   line-height: 1.45;
 }
 
@@ -751,8 +786,8 @@ canvas {
   border: 1px solid rgba(255, 241, 123, 0.22);
   background: rgba(255, 241, 123, 0.08);
   color: var(--focus);
-  font-size: 0.74rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -773,8 +808,8 @@ canvas {
   display: block;
   margin-bottom: 8px;
   color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -802,14 +837,14 @@ canvas {
 .brain-bank-meta-item span {
   display: block;
   color: var(--muted);
-  font-size: 0.68rem;
-  letter-spacing: 0.12em;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.08em;
   margin-bottom: 5px;
 }
 
 .brain-bank-meta-item strong {
   color: var(--text);
-  font-size: 0.88rem;
+  font-size: var(--ui-copy-size);
 }
 
 .brain-bank-card-actions {
@@ -825,22 +860,27 @@ canvas {
   line-height: 1.5;
 }
 
-@media (max-width: 1540px) {
+@media (max-width: 1680px) {
   .sim-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(390px, 0.92fr);
+    grid-template-columns: minmax(250px, 0.42fr) minmax(0, 1fr);
     grid-template-areas:
-      "telemetry side"
-      "world side";
+      "telemetry world"
+      "side world";
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1380px) {
   .sim-layout {
     grid-template-columns: 1fr;
     grid-template-areas:
       "telemetry"
       "world"
       "side";
+  }
+
+  .telemetry-panel,
+  .world-panel {
+    position: static;
   }
 
   .status-strip {
@@ -863,7 +903,7 @@ canvas {
 
 @media (max-width: 860px) {
   .app-shell {
-    width: min(100vw - 10px, 1880px);
+    width: min(100vw - 10px, 1840px);
     padding-top: 8px;
   }
 
@@ -872,7 +912,7 @@ canvas {
   }
 
   .status-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 
   .legend-grid,
@@ -890,7 +930,7 @@ canvas {
   }
 
   .brain-bank-shell {
-    width: min(100vw - 12px, 1660px);
+    width: min(100vw - 12px, 1540px);
   }
 
   .brain-bank-dialog {
