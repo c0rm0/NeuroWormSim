@@ -78,6 +78,7 @@ const DEFAULT_CONFIG = {
   minEatingForwardDrive: 0.15,
   minEatingForwardVelocity: 0.18,
   eggHatchFrames: 180,
+  birthAnimationFrames: 32,
   juvenileGrowthFrames: 600,
   deathAnimationFrames: 40,
   memoryNeuronCount: 4,
@@ -96,6 +97,13 @@ const DEFAULT_CONFIG = {
   segmentImpactSpread: 0.58,
   segmentWallBounce: 0.34,
   segmentTurnCurlStrength: 0.9,
+  segmentWaveAmplitude: 0.16,
+  segmentWaveFrequency: 0.34,
+  segmentWaveLag: 0.82,
+  segmentWaveVelocityCarry: 0.035,
+  segmentWaveAngleInfluence: 0.2,
+  slitherSideThrust: 0.045,
+  slitherTurnAssist: 0.008,
   segmentSignalSmoothing: 0.14,
   reproduceThreshold: 112,
   reproduceCost: 42,
@@ -2094,6 +2102,7 @@ function createCreature(parent = null, options = {}) {
     recentAction: lifeStage === "egg" ? "EGG" : "FORWARD",
     lifeStage,
     eggTimer: lifeStage === "egg" ? CONFIG.eggHatchFrames : 0,
+    birthingTimer: 0,
     growthTimer: lifeStage === "juvenile" ? CONFIG.juvenileGrowthFrames : 0,
     deathTimer: 0,
     deathSpin: rand(-0.18, 0.18),
@@ -2187,6 +2196,118 @@ function bodyLocalToWorld(creature, metrics, localX, localY) {
     x: creature.x + localX * cos - localY * sin,
     y: creature.y + localX * sin + localY * cos
   };
+}
+
+function getEggSpawnPose(parent, bodyMetrics = null) {
+  const metrics = bodyMetrics || getCreatureBodyMetrics(parent);
+  ensureCreatureSegmentBodies(parent, metrics);
+  const adultCount = getAdultSegmentCount(parent);
+  const eggRadius = Math.max(5, Math.round(CONFIG.creatureRadius * 0.62));
+
+  if (adultCount > 0) {
+    const tailIndex = adultCount - 1;
+    const tailSegment = parent.segmentBodies[tailIndex];
+    const tailLayout = metrics.segmentLayout.segments[tailIndex];
+    if (tailSegment && tailLayout) {
+      const spawnDistance = tailLayout.length * 0.52 + eggRadius + 2;
+      return {
+        x: clamp(
+          tailSegment.x - Math.cos(tailSegment.angle) * spawnDistance,
+          eggRadius + 2,
+          WIDTH - eggRadius - 2
+        ),
+        y: clamp(
+          tailSegment.y - Math.sin(tailSegment.angle) * spawnDistance,
+          eggRadius + 2,
+          HEIGHT - eggRadius - 2
+        ),
+        angle: tailSegment.angle
+      };
+    }
+  }
+
+  const tailAnchor = bodyLocalToWorld(
+    parent,
+    metrics,
+    metrics.tailAnchorLocal.x,
+    metrics.tailAnchorLocal.y
+  );
+  const fallbackDistance = metrics.headLength * 0.7 + eggRadius + 3;
+  return {
+    x: clamp(
+      tailAnchor.x - Math.cos(parent.heading) * fallbackDistance,
+      eggRadius + 2,
+      WIDTH - eggRadius - 2
+    ),
+    y: clamp(
+      tailAnchor.y - Math.sin(parent.heading) * fallbackDistance,
+      eggRadius + 2,
+      HEIGHT - eggRadius - 2
+    ),
+    angle: parent.heading
+  };
+}
+
+function getEggSpawnPosition(parent) {
+  const bodyMetrics = getCreatureBodyMetrics(parent);
+  const pose = getEggSpawnPose(parent, bodyMetrics);
+  return {
+    x: pose.x,
+    y: pose.y
+  };
+}
+
+function getBirthingTravelProgress(creature, nodeCount) {
+  if (creature.birthingTimer <= 0 || nodeCount <= 1) {
+    return null;
+  }
+
+  const progress = smooth01(clamp(1 - creature.birthingTimer / CONFIG.birthAnimationFrames, 0, 1));
+  return {
+    progress,
+    travel: progress * (nodeCount - 1)
+  };
+}
+
+function getBirthingSegmentBulge(creature, segmentIndex, segmentCount) {
+  const birthingState = getBirthingTravelProgress(creature, segmentCount + 2);
+  if (!birthingState) {
+    return 0;
+  }
+
+  const bulgeCenter = segmentIndex + 1;
+  const distance = Math.abs(birthingState.travel - bulgeCenter);
+  return smooth01(clamp(1 - distance / 0.92, 0, 1));
+}
+
+function beginCreatureBirth(creature) {
+  creature.birthingTimer = CONFIG.birthAnimationFrames;
+  creature.forwardDrive = 0;
+  creature.sideDrive = 0;
+  creature.displayForwardDrive = damp(creature.displayForwardDrive, 0, 0.65);
+  creature.displaySideDrive = damp(creature.displaySideDrive, 0, 0.65);
+  creature.turnVelocity *= 0.18;
+  creature.displayTurnVelocity = damp(creature.displayTurnVelocity, 0, 0.6);
+  creature.vx *= 0.22;
+  creature.vy *= 0.22;
+  creature.recentAction = "BIRTH";
+}
+
+function releaseCreatureEgg(parent) {
+  const spawnPose = getEggSpawnPose(parent);
+  const child = createCreature(parent, {
+    lifeStage: "egg",
+    positionOverride: spawnPose
+  });
+  child.heading = spawnPose.angle + rand(-0.18, 0.18);
+  child.vx = parent.vx * 0.18 - Math.cos(spawnPose.angle) * rand(0.12, 0.22) + rand(-0.08, 0.08);
+  child.vy = parent.vy * 0.18 - Math.sin(spawnPose.angle) * rand(0.12, 0.22) + rand(-0.08, 0.08);
+  state.creatures.push(child);
+  state.births += 1;
+  parent.children += 1;
+  parent.recentAction = "LAID";
+  spawnSpark(child.x, child.y, "#fff17b", 8);
+  playBirthSound(child.x);
 }
 
 function getAdultSegmentCount(creature) {
@@ -2345,6 +2466,11 @@ function relaxCreatureSegments(creature, iterations = 1) {
   const normalizedTurn = CONFIG.maxTurnSpeed > 0
     ? clamp(creature.displayTurnVelocity / CONFIG.maxTurnSpeed, -1, 1)
     : 0;
+  const locomotionDrive = clamp(
+    Math.abs(creature.displayForwardDrive) * 0.82 + Math.abs(normalizedTurn) * 0.38,
+    0,
+    1
+  );
 
   const anchor = bodyLocalToWorld(
     creature,
@@ -2363,8 +2489,20 @@ function relaxCreatureSegments(creature, iterations = 1) {
     const segment = creature.segmentBodies[i];
     const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
     const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
-    const anchorX = parentX - Math.cos(parentAngle) * spacing;
-    const anchorY = parentY - Math.sin(parentAngle) * spacing;
+    const wavePhase = creature.movePhase * CONFIG.segmentWaveFrequency - i * CONFIG.segmentWaveLag;
+    const waveStrength = locomotionDrive * (0.24 + progress * 0.92);
+    const waveOffset =
+      Math.sin(wavePhase) *
+      bodyMetrics.headLength *
+      CONFIG.segmentWaveAmplitude *
+      waveStrength;
+    const waveVelocity =
+      Math.cos(wavePhase) *
+      bodyMetrics.headLength *
+      CONFIG.segmentWaveVelocityCarry *
+      waveStrength;
+    const anchorX = parentX - Math.cos(parentAngle) * spacing - Math.sin(parentAngle) * waveOffset;
+    const anchorY = parentY - Math.sin(parentAngle) * spacing + Math.cos(parentAngle) * waveOffset;
     const leaderPull = CONFIG.segmentFollowStiffness * (0.92 - progress * 0.18);
     const inheritedVelocity = 0.08 + (1 - progress) * 0.06;
     const turnBias = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.08 + progress * 0.12);
@@ -2373,12 +2511,12 @@ function relaxCreatureSegments(creature, iterations = 1) {
       segment.vx * CONFIG.segmentVelocityDamping +
       (anchorX - segment.x) * leaderPull +
       parentVX * inheritedVelocity +
-      -Math.sin(parentAngle) * turnBias * 0.12;
+      -Math.sin(parentAngle) * (turnBias * 0.12 + waveVelocity);
     segment.vy =
       segment.vy * CONFIG.segmentVelocityDamping +
       (anchorY - segment.y) * leaderPull +
       parentVY * inheritedVelocity +
-      Math.cos(parentAngle) * turnBias * 0.12;
+      Math.cos(parentAngle) * (turnBias * 0.12 + waveVelocity);
 
     const segmentSpeed = Math.hypot(segment.vx, segment.vy);
     if (segmentSpeed > CONFIG.segmentMaxSpeed) {
@@ -2438,7 +2576,13 @@ function relaxCreatureSegments(creature, iterations = 1) {
   for (let i = 0; i < adultCount; i += 1) {
     const segment = creature.segmentBodies[i];
     const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-    const chainAngle = Math.atan2(parentY - segment.y, parentX - segment.x);
+    const wavePhase = creature.movePhase * CONFIG.segmentWaveFrequency - i * CONFIG.segmentWaveLag;
+    const waveAngle =
+      Math.cos(wavePhase) *
+      CONFIG.segmentWaveAngleInfluence *
+      locomotionDrive *
+      (0.3 + progress * 0.9);
+    const chainAngle = Math.atan2(parentY - segment.y, parentX - segment.x) + waveAngle;
     const anglePull =
       normalizeAngle(chainAngle - segment.angle) * (CONFIG.segmentAngleFollow * (1 - progress * 0.18));
     const carryPull =
@@ -2656,6 +2800,25 @@ function updateDyingCreature(creature) {
   creature.y += creature.vy * 0.3;
   resolveCreatureWallCollisions(creature);
   relaxCreatureSegments(creature, 2);
+}
+
+function updateBirthingCreature(creature) {
+  creature.birthingTimer = Math.max(0, creature.birthingTimer - 1);
+  creature.forwardDrive = 0;
+  creature.sideDrive = 0;
+  creature.displayForwardDrive = damp(creature.displayForwardDrive, 0, 0.28);
+  creature.displaySideDrive = damp(creature.displaySideDrive, 0, 0.28);
+  creature.turnVelocity *= 0.28;
+  creature.displayTurnVelocity = damp(creature.displayTurnVelocity, 0, 0.3);
+  creature.vx *= 0.16;
+  creature.vy *= 0.16;
+  creature.recentAction = "BIRTH";
+  creature.movePhase += 0.08;
+  relaxCreatureSegments(creature, 2);
+
+  if (creature.birthingTimer <= 0) {
+    releaseCreatureEgg(creature);
+  }
 }
 
 function buildIncubationPositions(count) {
@@ -3162,6 +3325,14 @@ function updateCreature(creature) {
   }
 
   creature.energy -= creature.lifeStage === "juvenile" ? CONFIG.metabolism * 0.72 : CONFIG.metabolism;
+  if (creature.energy <= 0) {
+    killCreature(creature);
+    return;
+  }
+  if (creature.birthingTimer > 0) {
+    updateBirthingCreature(creature);
+    return;
+  }
 
   applyBrain(creature);
   creature.displayForwardDrive = damp(
@@ -3175,6 +3346,9 @@ function updateCreature(creature) {
     CONFIG.segmentSignalSmoothing
   );
   creature.turnVelocity += creature.sideDrive * CONFIG.turnRate;
+  const locomotion = clamp(Math.max(0, creature.displayForwardDrive), 0, 1);
+  const slitherPhase = creature.movePhase * CONFIG.segmentWaveFrequency;
+  creature.turnVelocity += Math.cos(slitherPhase) * locomotion * CONFIG.slitherTurnAssist;
   creature.turnVelocity *= CONFIG.turnDrag;
   creature.turnVelocity = clamp(creature.turnVelocity, -CONFIG.maxTurnSpeed, CONFIG.maxTurnSpeed);
   creature.displayTurnVelocity = damp(
@@ -3189,6 +3363,9 @@ function updateCreature(creature) {
 
   creature.vx += headingX * creature.forwardDrive * CONFIG.thrust;
   creature.vy += headingY * creature.forwardDrive * CONFIG.thrust;
+  const slitherForce = Math.sin(slitherPhase) * locomotion * CONFIG.slitherSideThrust;
+  creature.vx += -headingY * slitherForce;
+  creature.vy += headingX * slitherForce;
 
   creature.vx *= CONFIG.friction;
   creature.vy *= CONFIG.friction;
@@ -3274,7 +3451,7 @@ function attemptReproduce(creature) {
     return;
   }
 
-  if (creature.lifeStage !== "adult") {
+  if (creature.lifeStage !== "adult" || creature.birthingTimer > 0) {
     return;
   }
 
@@ -3292,15 +3469,7 @@ function attemptReproduce(creature) {
     return;
   }
 
-  const child = createCreature(creature, { lifeStage: "egg" });
-  child.heading = creature.heading + rand(-0.35, 0.35);
-  child.vx = creature.vx * 0.55 + rand(-0.4, 0.4);
-  child.vy = creature.vy * 0.55 + rand(-0.4, 0.4);
-  state.creatures.push(child);
-  state.births += 1;
-  creature.children += 1;
-  spawnSpark(child.x, child.y, "#fff17b", 8);
-  playBirthSound(child.x);
+  beginCreatureBirth(creature);
 }
 
 function recordArchive(creature, includeForExtinction = true) {
@@ -5475,12 +5644,17 @@ function buildSegmentedBodyLayout(creature, headLength, headHeight, lifeScale, t
 
     const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
     const segmentScale = 1 - progress * 0.22;
-    const segmentLength = Math.max(6, Math.round(headLength * segmentScale));
-    const segmentHeight = Math.max(5, Math.round(headHeight * (1 - progress * 0.18)));
+    const birthBulge = getBirthingSegmentBulge(creature, i, segmentCount);
+    const segmentLength = Math.max(6, Math.round(headLength * segmentScale * (1 - birthBulge * 0.08)));
+    const segmentHeight = Math.max(
+      5,
+      Math.round(headHeight * (1 - progress * 0.18) * (1 + birthBulge * 0.5))
+    );
     const radius = Math.max(4, segmentHeight * 0.44);
 
     const segment = {
       progress,
+      birthBulge,
       x: segmentState.x,
       y: segmentState.y,
       angle: segmentState.angle,
@@ -5553,32 +5727,91 @@ function drawSegmentedBody(layout, creature, bodyColor, bodyShadow) {
   }
 }
 
-function drawEggCreature(creature, isFeatured) {
-  const pulse = 1 + Math.sin(creature.movePhase * 0.6) * 0.05;
-  const radiusScale = (creature.radius || CONFIG.creatureRadius) / 10;
-  const eggWidth = Math.round(14 * radiusScale * pulse);
-  const eggHeight = Math.round(18 * radiusScale * pulse);
-  const crackProgress = 1 - clamp(creature.eggTimer / CONFIG.eggHatchFrames, 0, 1);
-  const shellColor = `hsl(${creature.hue} 48% 84%)`;
-  const shellShadow = `hsla(${creature.hue} 60% 72% / 0.35)`;
+function drawEggSprite(width, height, hue, crackProgress = 0, alpha = 1) {
+  const shellColor = `hsl(${hue} 48% 84%)`;
+  const shellShadow = `hsla(${hue} 60% 72% / 0.35)`;
+  const coreWidth = Math.max(4, Math.round(width));
+  const coreHeight = Math.max(6, Math.round(height));
+  const shineWidth = Math.max(2, Math.round(coreWidth * 0.18));
 
+  worldCtx.save();
+  worldCtx.globalAlpha *= alpha;
   worldCtx.fillStyle = shellShadow;
-  worldCtx.fillRect(-Math.round(eggWidth * 0.5) - 2, -Math.round(eggHeight * 0.5), eggWidth + 4, eggHeight);
-  worldCtx.fillRect(-Math.round(eggWidth * 0.35), -Math.round(eggHeight * 0.6), Math.round(eggWidth * 0.7), Math.round(eggHeight * 1.2));
+  worldCtx.fillRect(-Math.round(coreWidth * 0.5) - 1, -Math.round(coreHeight * 0.5), coreWidth + 2, coreHeight);
+  worldCtx.fillRect(
+    -Math.round(coreWidth * 0.28),
+    -Math.round(coreHeight * 0.58),
+    Math.max(3, Math.round(coreWidth * 0.56)),
+    Math.max(6, Math.round(coreHeight * 1.16))
+  );
 
   worldCtx.fillStyle = shellColor;
-  worldCtx.fillRect(-Math.round(eggWidth * 0.5), -Math.round(eggHeight * 0.5), eggWidth, eggHeight);
-  worldCtx.fillRect(-Math.round(eggWidth * 0.32), -Math.round(eggHeight * 0.65), Math.round(eggWidth * 0.64), Math.round(eggHeight * 1.3));
+  worldCtx.fillRect(-Math.round(coreWidth * 0.5), -Math.round(coreHeight * 0.5), coreWidth, coreHeight);
+  worldCtx.fillRect(
+    -Math.round(coreWidth * 0.28),
+    -Math.round(coreHeight * 0.64),
+    Math.max(3, Math.round(coreWidth * 0.56)),
+    Math.max(6, Math.round(coreHeight * 1.28))
+  );
 
   worldCtx.fillStyle = "#f9ffff";
-  worldCtx.fillRect(-2, -Math.round(eggHeight * 0.34), 4, 3);
+  worldCtx.fillRect(
+    -Math.round(shineWidth * 0.5),
+    -Math.round(coreHeight * 0.3),
+    shineWidth,
+    Math.max(2, Math.round(coreHeight * 0.16))
+  );
 
   if (crackProgress > 0.5) {
     worldCtx.fillStyle = "#183147";
-    worldCtx.fillRect(-1, -4, 2, 3);
+    worldCtx.fillRect(-1, -Math.max(3, Math.round(coreHeight * 0.22)), 2, 3);
     worldCtx.fillRect(-3, -1, 2, 2);
     worldCtx.fillRect(1, 1, 2, 2);
   }
+  worldCtx.restore();
+}
+
+function drawBirthingEggOverlay(layout, creature, bodyMetrics) {
+  const birthingState = getBirthingTravelProgress(creature, layout.segments.length + 2);
+  if (!birthingState) {
+    return;
+  }
+
+  const spawnPose = getEggSpawnPose(creature, bodyMetrics);
+  const pathNodes = [{ x: creature.x, y: creature.y, angle: creature.heading }]
+    .concat(layout.segments.map((segment) => ({ x: segment.x, y: segment.y, angle: segment.angle })))
+    .concat([spawnPose]);
+
+  if (pathNodes.length < 2) {
+    return;
+  }
+
+  const { progress, travel } = birthingState;
+  const index = Math.min(pathNodes.length - 2, Math.floor(travel));
+  const t = travel - index;
+  const fromNode = pathNodes[index];
+  const toNode = pathNodes[index + 1];
+  const x = lerp(fromNode.x, toNode.x, t);
+  const y = lerp(fromNode.y, toNode.y, t);
+  const angle = Math.atan2(toNode.y - fromNode.y, toNode.x - fromNode.x);
+  const pulse = 1 + Math.sin(creature.movePhase * 0.9 + progress * TAU) * 0.04;
+  const eggWidth = Math.max(5, Math.round(bodyMetrics.headHeight * 0.52 * pulse));
+  const eggHeight = Math.max(7, Math.round(bodyMetrics.headLength * 0.38 * pulse));
+
+  worldCtx.save();
+  worldCtx.translate(x, y);
+  worldCtx.rotate(angle);
+  drawEggSprite(eggWidth, eggHeight, creature.hue, 0, 0.84);
+  worldCtx.restore();
+}
+
+function drawEggCreature(creature, isFeatured) {
+  const pulse = 1 + Math.sin(creature.movePhase * 0.6) * 0.05;
+  const radiusScale = (creature.radius || CONFIG.creatureRadius) / 10;
+  const eggWidth = Math.round(10 * radiusScale * pulse);
+  const eggHeight = Math.round(14 * radiusScale * pulse);
+  const crackProgress = 1 - clamp(creature.eggTimer / CONFIG.eggHatchFrames, 0, 1);
+  drawEggSprite(eggWidth, eggHeight, creature.hue, crackProgress);
 }
 
 function drawCreature(creature, isFeatured) {
@@ -5604,6 +5837,7 @@ function drawCreature(creature, isFeatured) {
     ? `hsla(${creature.hue} 95% 72% / 0.3)`
     : `rgba(10, 18, 28, ${0.36 - deathProgress * 0.18})`;
 
+  drawBirthingEggOverlay(bodyMetrics.segmentLayout, creature, bodyMetrics);
   drawSegmentedBody(bodyMetrics.segmentLayout, creature, bodyColor, bodyShadow);
 
   worldCtx.save();
