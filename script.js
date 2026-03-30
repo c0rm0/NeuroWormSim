@@ -4,6 +4,8 @@ const telemetryCanvas = document.getElementById("telemetryCanvas");
 const telemetryCtx = telemetryCanvas.getContext("2d");
 const networkCanvas = document.getElementById("networkCanvas");
 const networkCtx = networkCanvas.getContext("2d");
+const familyTreeCanvas = document.getElementById("familyTreeCanvas");
+const familyTreeCtx = familyTreeCanvas.getContext("2d");
 
 const populationStat = document.getElementById("populationStat");
 const foodStat = document.getElementById("foodStat");
@@ -14,6 +16,8 @@ const extinctionStat = document.getElementById("extinctionStat");
 const runtimeStat = document.getElementById("runtimeStat");
 const lineageStat = document.getElementById("lineageStat");
 const creatureDetails = document.getElementById("creatureDetails");
+const familyTreeScroll = document.getElementById("familyTreeScroll");
+const familyTreeStatus = document.getElementById("familyTreeStatus");
 const controlDeck = document.getElementById("controlDeck");
 const resetControlsButton = document.getElementById("resetControlsButton");
 const sampleLongestButton = document.getElementById("sampleLongestButton");
@@ -34,6 +38,7 @@ const brainBankFileInput = document.getElementById("brainBankFileInput");
 worldCtx.imageSmoothingEnabled = false;
 telemetryCtx.imageSmoothingEnabled = false;
 networkCtx.imageSmoothingEnabled = false;
+familyTreeCtx.imageSmoothingEnabled = false;
 brainBankHabitatCtx.imageSmoothingEnabled = false;
 
 const WIDTH = worldCanvas.width;
@@ -187,6 +192,11 @@ const SENSOR_INPUT_COUNT = SENSOR_INPUT_LABELS.length;
 const MOVEMENT_OUTPUT_COUNT = MOVEMENT_OUTPUT_LABELS.length;
 const TELEMETRY_HISTORY_LIMIT = 220;
 const TELEMETRY_SAMPLE_INTERVAL = 6;
+const FAMILY_TREE_MIN_HEIGHT = 360;
+const FAMILY_TREE_ROW_GAP = 64;
+const FAMILY_TREE_MARGIN_X = 58;
+const FAMILY_TREE_TOP_PADDING = 34;
+const FAMILY_TREE_BOTTOM_PADDING = 30;
 const APP_NAME = "NeuroWormSim";
 const BRAIN_BANK_FILE_KIND = "neuro-worm-sim-brain-bank-specimen";
 const LEGACY_BRAIN_BANK_FILE_KINDS = ["retro-neural-lab-brain-bank-specimen"];
@@ -351,6 +361,8 @@ const state = {
   startupScene: null,
   telemetryHistory: [],
   telemetrySampleClock: 0,
+  lineageNodes: new Map(),
+  lineageBirthOrder: 0,
   influenceTool: {
     pointerActive: false,
     pointerId: null,
@@ -1402,8 +1414,107 @@ function resetTelemetryHistory() {
   pushTelemetrySample(true);
 }
 
+function resetLineageTree() {
+  state.lineageNodes = new Map();
+  state.lineageBirthOrder = 0;
+}
+
+function registerLineageCreature(creature, parentId = null) {
+  if (!creature) {
+    return;
+  }
+
+  const resolvedParentId = Number.isFinite(parentId) && state.lineageNodes.has(parentId)
+    ? parentId
+    : null;
+  const parentNode = resolvedParentId !== null
+    ? state.lineageNodes.get(resolvedParentId)
+    : null;
+
+  const node = {
+    id: creature.id,
+    parentId: resolvedParentId,
+    birthOrder: state.lineageBirthOrder++,
+    generation: Math.max(1, Math.round(creature.generation || 1)),
+    hue: normalizeHueValue(creature.hue ?? 42),
+    age: creature.age || 0,
+    alive: creature.alive !== false,
+    lifeStage: creature.lifeStage || "adult",
+    recentAction: creature.recentAction || "IDLE",
+    offspringCount: creature.children || 0,
+    birthTick: state.tick,
+    deathTick: null,
+    childIds: []
+  };
+
+  state.lineageNodes.set(node.id, node);
+
+  if (parentNode && !parentNode.childIds.includes(node.id)) {
+    parentNode.childIds.push(node.id);
+  }
+}
+
+function updateLineageCreatureNode(creature) {
+  if (!creature) {
+    return;
+  }
+
+  let node = state.lineageNodes.get(creature.id);
+  if (!node) {
+    registerLineageCreature(creature, creature.lineageParentId ?? null);
+    node = state.lineageNodes.get(creature.id);
+  }
+  if (!node) {
+    return;
+  }
+
+  node.generation = Math.max(1, Math.round(creature.generation || 1));
+  node.hue = normalizeHueValue(creature.hue ?? node.hue);
+  node.age = creature.age || 0;
+  node.alive = creature.alive !== false;
+  node.lifeStage = creature.lifeStage || node.lifeStage;
+  node.recentAction = creature.recentAction || node.recentAction;
+  node.offspringCount = creature.children || 0;
+  if (node.alive) {
+    node.deathTick = null;
+  }
+}
+
+function syncLineageCreatures() {
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    updateLineageCreatureNode(state.creatures[i]);
+  }
+}
+
+function getLineageFocusId() {
+  if (state.featured?.id && state.lineageNodes.has(state.featured.id)) {
+    return state.featured.id;
+  }
+  if (state.extinctionSpecimen?.id && state.lineageNodes.has(state.extinctionSpecimen.id)) {
+    return state.extinctionSpecimen.id;
+  }
+  return null;
+}
+
+function getLineageTrailSet(focusId = getLineageFocusId()) {
+  const trail = new Set();
+  let cursor = focusId;
+
+  while (cursor !== null && cursor !== undefined) {
+    const node = state.lineageNodes.get(cursor);
+    if (!node || trail.has(node.id)) {
+      break;
+    }
+    trail.add(node.id);
+    cursor = node.parentId;
+  }
+
+  return trail;
+}
+
 function cloneExtinctionSpecimen(creature) {
   return {
+    id: creature.id,
     x: creature.x,
     y: creature.y,
     heading: creature.heading,
@@ -1614,6 +1725,7 @@ function renderSimulationPanels() {
   drawWorld();
   drawTelemetryPanel();
   drawNetworkPanel();
+  drawFamilyTreePanel();
 }
 
 async function saveBrainBankEntryToDisk(entry, promptIfMissing = false) {
@@ -2210,6 +2322,7 @@ async function restoreBrainBankFromDiskOnStartup() {
 
 function createCreature(parent = null, options = {}) {
   const radius = CONFIG.creatureRadius;
+  const lineageParentId = options.lineageParentIdOverride ?? (parent ? parent.id : null);
   const position = options.positionOverride
     ? {
         x: clamp(options.positionOverride.x, radius + 2, WIDTH - radius - 2),
@@ -2241,7 +2354,7 @@ function createCreature(parent = null, options = {}) {
       ? mutateSegmentGene(parent.segmentGene)
       : randomSegmentGene();
 
-  return {
+  const creature = {
     id: state.nextCreatureId++,
     x: position.x,
     y: position.y,
@@ -2276,8 +2389,12 @@ function createCreature(parent = null, options = {}) {
     growthTimer: lifeStage === "juvenile" ? CONFIG.juvenileGrowthFrames : 0,
     deathTimer: 0,
     deathSpin: rand(-0.18, 0.18),
+    lineageParentId,
     alive: true
   };
+
+  registerLineageCreature(creature, lineageParentId);
+  return creature;
 }
 
 function createFood() {
@@ -2930,6 +3047,14 @@ function killCreature(creature) {
   creature.memoryWrite = Array(CONFIG.memoryNeuronCount).fill(0);
   creature.recentAction = "DEAD";
   state.deaths += 1;
+  updateLineageCreatureNode(creature);
+  const lineageNode = state.lineageNodes.get(creature.id);
+  if (lineageNode) {
+    lineageNode.alive = false;
+    lineageNode.deathTick = state.tick;
+    lineageNode.age = creature.age;
+    lineageNode.recentAction = creature.recentAction;
+  }
   recordArchive(creature);
   if (wasLastLiving) {
     state.extinctionSpecimen = cloneExtinctionSpecimen(creature);
@@ -3408,6 +3533,7 @@ async function sampleFeaturedCreatureToBank() {
 }
 
 function seedWorld() {
+  resetLineageTree();
   state.creatures.length = 0;
   state.foods.length = 0;
   state.sparks.length = 0;
@@ -4063,6 +4189,7 @@ function reseedIfNeeded() {
         hueOverride: plan.hue,
         segmentGeneOverride: plan.segmentGene,
         generationOverride: plan.generation,
+        lineageParentIdOverride: plan.inherited ? state.extinctionSpecimen?.id ?? null : null,
         positionOverride: plan.position,
         headingOverride: plan.heading,
         velocityOverride: { vx: rand(-0.08, 0.08), vy: rand(-0.08, 0.08) },
@@ -4110,6 +4237,7 @@ function updateSimulation() {
   applyInfluenceField();
   resolveCreatureCollisions();
   updateSparks();
+  syncLineageCreatures();
   cullDeadCreatures();
   reseedIfNeeded();
   chooseFeaturedCreature();
@@ -7756,6 +7884,228 @@ function drawNetworkPanel() {
   networkCtx.textAlign = "left";
 
   renderDetails(featured, layerValues);
+}
+
+function drawFamilyTreePanel() {
+  const nodes = Array.from(state.lineageNodes.values());
+  const width = familyTreeCanvas.width;
+  let height = FAMILY_TREE_MIN_HEIGHT;
+  const stickToBottom = familyTreeScroll
+    ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
+    : false;
+
+  if (nodes.length === 0) {
+    if (familyTreeCanvas.height !== height) {
+      familyTreeCanvas.height = height;
+      familyTreeCtx.imageSmoothingEnabled = false;
+    }
+    familyTreeCtx.clearRect(0, 0, width, height);
+    familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
+    familyTreeCtx.fillRect(0, 0, width, height);
+    familyTreeCtx.fillStyle = "#ddfaff";
+    familyTreeCtx.font = CANVAS_FONTS.section;
+    familyTreeCtx.textAlign = "center";
+    familyTreeCtx.fillText("LINEAGE MAP WAITING", width * 0.5, height * 0.5 - 10);
+    familyTreeCtx.fillStyle = "#8bbfca";
+    familyTreeCtx.font = CANVAS_FONTS.body;
+    familyTreeCtx.fillText("Founders and offspring will appear here as the habitat runs.", width * 0.5, height * 0.5 + 14);
+    familyTreeCtx.textAlign = "left";
+    familyTreeStatus.textContent = "Tracking will begin as soon as the first family line is active.";
+    return;
+  }
+
+  const nodesByGeneration = new Map();
+  let maxGeneration = 1;
+
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    const generation = Math.max(1, Math.round(node.generation || 1));
+    if (!nodesByGeneration.has(generation)) {
+      nodesByGeneration.set(generation, []);
+    }
+    nodesByGeneration.get(generation).push(node);
+    if (generation > maxGeneration) {
+      maxGeneration = generation;
+    }
+  }
+
+  for (const generationNodes of nodesByGeneration.values()) {
+    generationNodes.sort((a, b) => a.birthOrder - b.birthOrder);
+  }
+
+  height = Math.max(
+    FAMILY_TREE_MIN_HEIGHT,
+    FAMILY_TREE_TOP_PADDING + maxGeneration * FAMILY_TREE_ROW_GAP + FAMILY_TREE_BOTTOM_PADDING
+  );
+  if (familyTreeCanvas.height !== height) {
+    familyTreeCanvas.height = height;
+    familyTreeCtx.imageSmoothingEnabled = false;
+  }
+
+  familyTreeCtx.clearRect(0, 0, width, height);
+  familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
+  familyTreeCtx.fillRect(0, 0, width, height);
+
+  for (let y = 0; y < height; y += 18) {
+    familyTreeCtx.fillStyle = "rgba(255, 255, 255, 0.02)";
+    familyTreeCtx.fillRect(0, y, width, 1);
+  }
+
+  const positions = new Map();
+  const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
+
+  for (let generation = 1; generation <= maxGeneration; generation += 1) {
+    const generationNodes = nodesByGeneration.get(generation) || [];
+    const y = FAMILY_TREE_TOP_PADDING + (generation - 1) * FAMILY_TREE_ROW_GAP + 12;
+
+    familyTreeCtx.fillStyle = "rgba(102, 220, 255, 0.08)";
+    familyTreeCtx.fillRect(FAMILY_TREE_MARGIN_X - 12, y, width - (FAMILY_TREE_MARGIN_X - 12) * 2, 1);
+    familyTreeCtx.fillStyle = generation % 2 === 0
+      ? "rgba(255, 241, 123, 0.52)"
+      : "rgba(157, 231, 255, 0.54)";
+    familyTreeCtx.font = CANVAS_FONTS.compact;
+    familyTreeCtx.textAlign = "left";
+    familyTreeCtx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+
+    if (generationNodes.length === 0) {
+      continue;
+    }
+
+    const spacing = usableWidth / (generationNodes.length + 1);
+    for (let index = 0; index < generationNodes.length; index += 1) {
+      const node = generationNodes[index];
+      positions.set(node.id, {
+        x: FAMILY_TREE_MARGIN_X + spacing * (index + 1),
+        y
+      });
+    }
+  }
+
+  const focusId = getLineageFocusId();
+  const trail = getLineageTrailSet(focusId);
+  const sortedNodes = nodes.slice().sort((a, b) =>
+    a.generation - b.generation || a.birthOrder - b.birthOrder
+  );
+
+  familyTreeCtx.save();
+  familyTreeCtx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    if (node.parentId === null || node.parentId === undefined) {
+      continue;
+    }
+
+    const parentPos = positions.get(node.parentId);
+    const childPos = positions.get(node.id);
+    if (!parentPos || !childPos) {
+      continue;
+    }
+
+    const highlighted = trail.has(node.id) && trail.has(node.parentId);
+    const controlY = (parentPos.y + childPos.y) * 0.5;
+    familyTreeCtx.strokeStyle = highlighted
+      ? "rgba(255, 241, 123, 0.84)"
+      : "rgba(102, 220, 255, 0.18)";
+    familyTreeCtx.lineWidth = highlighted ? 2.4 : 1;
+    familyTreeCtx.beginPath();
+    familyTreeCtx.moveTo(parentPos.x, parentPos.y + 6);
+    familyTreeCtx.bezierCurveTo(parentPos.x, controlY, childPos.x, controlY, childPos.x, childPos.y - 6);
+    familyTreeCtx.stroke();
+
+    if (highlighted) {
+      familyTreeCtx.strokeStyle = "rgba(74, 255, 212, 0.42)";
+      familyTreeCtx.lineWidth = 1;
+      familyTreeCtx.beginPath();
+      familyTreeCtx.moveTo(parentPos.x, parentPos.y + 6);
+      familyTreeCtx.bezierCurveTo(parentPos.x, controlY, childPos.x, controlY, childPos.x, childPos.y - 6);
+      familyTreeCtx.stroke();
+    }
+  }
+  familyTreeCtx.restore();
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    const position = positions.get(node.id);
+    if (!position) {
+      continue;
+    }
+
+    const generationNodes = nodesByGeneration.get(node.generation) || [];
+    const highlighted = trail.has(node.id);
+    const alive = node.alive;
+    const labelVisible = highlighted || (alive && generationNodes.length <= 8);
+    const nodeSize = highlighted
+      ? 10 + Math.min(4, node.offspringCount * 0.6)
+      : 6 + Math.min(3, node.offspringCount * 0.25);
+    const fillColor = alive
+      ? `hsla(${node.hue}, 84%, 64%, ${highlighted ? 0.98 : 0.82})`
+      : highlighted
+        ? "rgba(255, 241, 123, 0.64)"
+        : "rgba(139, 191, 202, 0.34)";
+
+    familyTreeCtx.save();
+    familyTreeCtx.shadowBlur = highlighted ? 18 : alive ? 8 : 0;
+    familyTreeCtx.shadowColor = highlighted ? "rgba(255, 241, 123, 0.72)" : fillColor;
+    familyTreeCtx.fillStyle = fillColor;
+    familyTreeCtx.fillRect(
+      Math.round(position.x - nodeSize * 0.5),
+      Math.round(position.y - nodeSize * 0.5),
+      Math.round(nodeSize),
+      Math.round(nodeSize)
+    );
+    familyTreeCtx.shadowBlur = 0;
+
+    familyTreeCtx.strokeStyle = highlighted
+      ? "rgba(255, 241, 123, 0.96)"
+      : alive
+        ? "rgba(221, 250, 255, 0.42)"
+        : "rgba(102, 220, 255, 0.18)";
+    familyTreeCtx.lineWidth = highlighted ? 2 : 1;
+    familyTreeCtx.strokeRect(
+      Math.round(position.x - nodeSize * 0.5) - 0.5,
+      Math.round(position.y - nodeSize * 0.5) - 0.5,
+      Math.round(nodeSize),
+      Math.round(nodeSize)
+    );
+
+    if (!alive) {
+      familyTreeCtx.strokeStyle = "rgba(255, 109, 179, 0.4)";
+      familyTreeCtx.beginPath();
+      familyTreeCtx.moveTo(position.x - nodeSize * 0.36, position.y - nodeSize * 0.36);
+      familyTreeCtx.lineTo(position.x + nodeSize * 0.36, position.y + nodeSize * 0.36);
+      familyTreeCtx.moveTo(position.x + nodeSize * 0.36, position.y - nodeSize * 0.36);
+      familyTreeCtx.lineTo(position.x - nodeSize * 0.36, position.y + nodeSize * 0.36);
+      familyTreeCtx.stroke();
+    }
+
+    if (labelVisible) {
+      familyTreeCtx.font = highlighted ? CANVAS_FONTS.body : CANVAS_FONTS.tiny;
+      familyTreeCtx.fillStyle = highlighted ? "#fff17b" : "rgba(221, 250, 255, 0.74)";
+      familyTreeCtx.textAlign = "center";
+      familyTreeCtx.fillText(
+        `C${String(node.id).padStart(3, "0")}`,
+        position.x,
+        position.y - nodeSize * 0.7 - 4
+      );
+    }
+
+    familyTreeCtx.restore();
+  }
+
+  familyTreeCtx.textAlign = "left";
+
+  if (focusId && trail.size > 0) {
+    const focusNode = state.lineageNodes.get(focusId);
+    familyTreeStatus.textContent = focusNode
+      ? `Highlight locked on C-${String(focusNode.id).padStart(3, "0")} // ${trail.size} ancestors in the inheritance trail. Scroll to inspect older branches.`
+      : "Live ancestry map active. Scroll to inspect older branches.";
+  } else {
+    familyTreeStatus.textContent = "Live ancestry map active. Scroll to inspect older branches.";
+  }
+
+  if (familyTreeScroll && stickToBottom) {
+    familyTreeScroll.scrollTop = familyTreeScroll.scrollHeight;
+  }
 }
 
 function updateStats() {
