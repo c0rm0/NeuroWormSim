@@ -884,31 +884,16 @@ canvas {
 @media (max-width: 860px) {
   .app-shell {
     width: min(100vw - 8px, 1840px);
-    padding: 2px 0 6px;
+    padding: 1px 0 4px;
   }
 
   .hud-bar {
-    flex-direction: column;
-    gap: 5px;
-    padding: 5px 6px;
+    gap: 0;
+    padding: 3px 4px;
+    margin-bottom: 8px;
   }
 
   .branding {
-    display: grid;
-    gap: 0;
-    max-width: none;
-  }
-
-  .branding h1 {
-    font-size: clamp(1.02rem, 4.2vw, 1.22rem);
-    line-height: 1.02;
-  }
-
-  .eyebrow {
-    display: none;
-  }
-
-  .tagline {
     display: none;
   }
 
@@ -921,23 +906,25 @@ canvas {
   }
 
   .status-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
   }
 
   .status-card {
-    min-height: 54px;
-    padding: 6px 7px;
+    min-height: 46px;
+    padding: 4px 5px;
+    justify-content: center;
+    gap: 2px;
   }
 
   .status-label {
-    font-size: 0.76rem;
-    line-height: 1.15;
-    letter-spacing: 0.04em;
+    font-size: 0.62rem;
+    line-height: 1.05;
+    letter-spacing: 0.03em;
   }
 
   .status-card strong {
-    font-size: clamp(0.98rem, 4.1vw, 1.16rem);
+    font-size: clamp(0.8rem, 3.4vw, 0.98rem);
     line-height: 1;
   }
 
@@ -990,34 +977,26 @@ canvas {
 
 @media (max-width: 640px) {
   .hud-bar {
-    gap: 4px;
-    padding: 4px 5px;
-  }
-
-  .branding {
-    gap: 0;
-  }
-
-  .branding h1 {
-    font-size: clamp(0.96rem, 4.7vw, 1.12rem);
+    padding: 2px 3px;
+    margin-bottom: 6px;
   }
 
   .status-strip {
-    gap: 4px;
+    gap: 2px;
   }
 
   .status-card {
-    min-height: 50px;
-    padding: 5px 6px;
+    min-height: 42px;
+    padding: 3px 4px;
   }
 
   .status-label {
-    font-size: 0.72rem;
-    letter-spacing: 0.04em;
+    font-size: 0.56rem;
+    letter-spacing: 0.02em;
   }
 
   .status-card strong {
-    font-size: clamp(0.92rem, 4.4vw, 1.08rem);
+    font-size: clamp(0.72rem, 3.9vw, 0.9rem);
   }
 
   .panel-heading {
