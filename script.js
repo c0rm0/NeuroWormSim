@@ -8,6 +8,7 @@ const networkCtx = networkCanvas.getContext("2d");
 const populationStat = document.getElementById("populationStat");
 const foodStat = document.getElementById("foodStat");
 const birthStat = document.getElementById("birthStat");
+const deathStat = document.getElementById("deathStat");
 const oldestStat = document.getElementById("oldestStat");
 const extinctionStat = document.getElementById("extinctionStat");
 const runtimeStat = document.getElementById("runtimeStat");
@@ -318,6 +319,7 @@ const state = {
   recentExtinctionSegmentGene: 5,
   extinctionFrames: 0,
   extinctionCount: 0,
+  deaths: 0,
   lineageTick: 0,
   extinctionLogged: false,
   extinctionSpecimen: null,
@@ -2613,6 +2615,7 @@ function killCreature(creature) {
   creature.outputs = Array(OUTPUT_LABELS.length).fill(0);
   creature.memoryWrite = Array(CONFIG.memoryNeuronCount).fill(0);
   creature.recentAction = "DEAD";
+  state.deaths += 1;
   recordArchive(creature);
   if (wasLastLiving) {
     state.extinctionSpecimen = cloneExtinctionSpecimen(creature);
@@ -2950,6 +2953,7 @@ function seedWorld() {
   state.foods.length = 0;
   state.sparks.length = 0;
   state.births = 0;
+  state.deaths = 0;
   state.tick = 0;
   state.lineageTick = 0;
   state.featured = null;
@@ -6662,6 +6666,7 @@ function updateStats() {
   populationStat.textContent = String(getLivingCreaturesCount()).padStart(2, "0");
   foodStat.textContent = String(state.foods.length).padStart(2, "0");
   birthStat.textContent = String(state.births).padStart(2, "0");
+  deathStat.textContent = String(state.deaths).padStart(2, "0");
   oldestStat.textContent = state.featured ? formatAge(state.featured.age) : "--";
   extinctionStat.textContent = String(state.extinctionCount).padStart(2, "0");
   runtimeStat.textContent = formatRunTimer(state.tick);

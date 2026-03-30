@@ -884,13 +884,13 @@ canvas {
 @media (max-width: 860px) {
   .app-shell {
     width: min(100vw - 8px, 1840px);
-    padding: 6px 0 10px;
+    padding: 4px 0 8px;
   }
 
   .hud-bar {
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+    gap: 8px;
+    padding: 8px 10px;
   }
 
   .branding {
@@ -898,13 +898,14 @@ canvas {
   }
 
   .eyebrow {
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     letter-spacing: 0.08em;
   }
 
   .tagline {
-    margin-top: 8px;
+    margin-top: 6px;
     max-width: none;
+    line-height: 1.28;
   }
 
   .sim-layout {
@@ -917,12 +918,20 @@ canvas {
 
   .status-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
   }
 
   .status-card {
-    min-height: 76px;
-    padding: 10px;
+    min-height: 64px;
+    padding: 8px 9px;
+  }
+
+  .status-label {
+    line-height: 1.15;
+  }
+
+  .status-card strong {
+    line-height: 1;
   }
 
   .legend-grid,
@@ -974,11 +983,46 @@ canvas {
 
 @media (max-width: 640px) {
   .hud-bar {
-    padding: 10px;
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .branding {
+    display: grid;
+    gap: 4px;
   }
 
   .branding h1 {
-    font-size: clamp(1.18rem, 5vw, 1.5rem);
+    font-size: clamp(1.1rem, 4.8vw, 1.38rem);
+  }
+
+  .eyebrow {
+    margin-bottom: 0;
+    font-size: 0.78rem;
+  }
+
+  .tagline {
+    margin-top: 0;
+    font-size: 0.9rem;
+    line-height: 1.22;
+  }
+
+  .status-strip {
+    gap: 5px;
+  }
+
+  .status-card {
+    min-height: 58px;
+    padding: 7px 8px;
+  }
+
+  .status-label {
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
+  }
+
+  .status-card strong {
+    font-size: clamp(1.02rem, 4.6vw, 1.24rem);
   }
 
   .panel-heading {
