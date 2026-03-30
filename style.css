@@ -379,6 +379,10 @@ canvas {
   overflow: hidden;
 }
 
+.sensor-signal-bar {
+  height: 24px;
+}
+
 .signal-bar i {
   display: block;
   height: 100%;

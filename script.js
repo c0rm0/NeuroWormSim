@@ -5162,8 +5162,8 @@ function drawExtinctionScene() {
   const leftClusterW = forgeX - leftClusterX - 24;
   const specimenW = Math.max(220, Math.round(leftClusterW * 0.38));
   const specimenH = 208;
-  const winnerW = Math.max(236, leftClusterW - specimenW - 18);
-  const winnerH = 186;
+  const winnerW = Math.max(118, Math.round((leftClusterW - specimenW - 18) * 0.5));
+  const winnerH = 93;
   const specimenX = leftClusterX;
   const specimenY = chamberTop + 4;
   const winnerX = specimenX + specimenW + 18;
@@ -7252,32 +7252,32 @@ function renderDetails(featured, displayLayers) {
       ${outputMarkup}
       <div class="signal-line">
         <span>L EYE FOOD</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[0] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[0] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[1] || 0).toFixed(2)}</b>
       </div>
       <div class="signal-line">
         <span>L EYE BODY</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[2] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[2] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[3] || 0).toFixed(2)}</b>
       </div>
       <div class="signal-line">
         <span>L EYE WALL</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[4] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[4] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[5] || 0).toFixed(2)}</b>
       </div>
       <div class="signal-line">
         <span>R EYE FOOD</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[6] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[6] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[7] || 0).toFixed(2)}</b>
       </div>
       <div class="signal-line">
         <span>R EYE BODY</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[8] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[8] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[9] || 0).toFixed(2)}</b>
       </div>
       <div class="signal-line">
         <span>R EYE WALL</span>
-        <div class="signal-bar"><i style="width:${Math.round((smoothedInputs[10] || 0) * 100)}%"></i></div>
+        <div class="signal-bar sensor-signal-bar"><i style="width:${Math.round((smoothedInputs[10] || 0) * 100)}%"></i></div>
         <b>${(smoothedInputs[11] || 0).toFixed(2)}</b>
       </div>
       ${memoryMarkup}
