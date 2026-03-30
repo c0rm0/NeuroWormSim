@@ -211,19 +211,6 @@ body::after {
   margin-bottom: 10px;
 }
 
-.panel-heading-split {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px 12px;
-}
-
-.panel-heading-copy {
-  flex: 1 1 260px;
-  min-width: 0;
-}
-
 .panel-heading h2,
 .brain-bank-monitor-copy h2,
 .brain-bank-header h2 {
@@ -619,12 +606,6 @@ canvas {
 
 .retro-button-quiet {
   color: var(--text);
-}
-
-.panel-action-button {
-  width: auto;
-  min-width: min(100%, 236px);
-  align-self: start;
 }
 
 #worldCanvas.influence-tool-active {

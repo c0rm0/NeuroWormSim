@@ -19,7 +19,6 @@ const resetControlsButton = document.getElementById("resetControlsButton");
 const sampleLongestButton = document.getElementById("sampleLongestButton");
 const spawnTrophyWormButton = document.getElementById("spawnTrophyWormButton");
 const openBrainBankButton = document.getElementById("openBrainBankButton");
-const influenceToolButton = document.getElementById("influenceToolButton");
 const brainBankStatus = document.getElementById("brainBankStatus");
 const brainBankModal = document.getElementById("brainBankModal");
 const brainBankList = document.getElementById("brainBankList");
@@ -353,7 +352,6 @@ const state = {
   telemetryHistory: [],
   telemetrySampleClock: 0,
   influenceTool: {
-    enabled: false,
     pointerActive: false,
     pointerId: null,
     x: WIDTH * 0.5,
@@ -1212,24 +1210,14 @@ function canUseInfluenceTool() {
 }
 
 function isInfluenceToolActive() {
-  return state.influenceTool.enabled && state.influenceTool.pointerActive && canUseInfluenceTool();
+  return state.influenceTool.pointerActive && canUseInfluenceTool();
 }
 
 function updateInfluenceToolUi() {
-  if (!influenceToolButton) {
-    return;
-  }
-
   if (!canUseInfluenceTool()) {
     clearInfluencePointer();
   }
-
-  const enabled = state.influenceTool.enabled;
-  influenceToolButton.textContent = enabled ? "SPHERE OF INFLUENCE ON" : "SPHERE OF INFLUENCE OFF";
-  influenceToolButton.setAttribute("aria-pressed", enabled ? "true" : "false");
-  influenceToolButton.classList.toggle("is-active", enabled);
-  influenceToolButton.disabled = !canUseInfluenceTool();
-  worldCanvas.classList.toggle("influence-tool-active", enabled && canUseInfluenceTool());
+  worldCanvas.classList.toggle("influence-tool-active", canUseInfluenceTool());
 }
 
 function clearInfluencePointer() {
@@ -1264,7 +1252,7 @@ function updateInfluencePointer(event) {
 }
 
 function handleInfluencePointerDown(event) {
-  if (!state.influenceTool.enabled || !canUseInfluenceTool()) {
+  if (!canUseInfluenceTool()) {
     return;
   }
 
@@ -1286,7 +1274,7 @@ function handleInfluencePointerDown(event) {
 }
 
 function handleInfluencePointerMove(event) {
-  if (!state.influenceTool.enabled || !state.influenceTool.pointerActive) {
+  if (!state.influenceTool.pointerActive) {
     return;
   }
 
@@ -1303,18 +1291,10 @@ function handleInfluencePointerEnd(event) {
     return;
   }
 
-  if (state.influenceTool.enabled) {
+  if (state.influenceTool.pointerActive) {
     event.preventDefault();
   }
   clearInfluencePointer();
-}
-
-function toggleInfluenceTool() {
-  state.influenceTool.enabled = !state.influenceTool.enabled;
-  if (!state.influenceTool.enabled) {
-    clearInfluencePointer();
-  }
-  updateInfluenceToolUi();
 }
 
 function getTelemetrySnapshot() {
@@ -7450,7 +7430,6 @@ function frame(timestamp) {
 }
 
 buildControlDeck();
-influenceToolButton.addEventListener("click", toggleInfluenceTool);
 resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
 spawnTrophyWormButton.addEventListener("click", () => {
