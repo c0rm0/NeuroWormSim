@@ -19,6 +19,7 @@ const resetControlsButton = document.getElementById("resetControlsButton");
 const sampleLongestButton = document.getElementById("sampleLongestButton");
 const spawnTrophyWormButton = document.getElementById("spawnTrophyWormButton");
 const openBrainBankButton = document.getElementById("openBrainBankButton");
+const influenceToolButton = document.getElementById("influenceToolButton");
 const brainBankStatus = document.getElementById("brainBankStatus");
 const brainBankModal = document.getElementById("brainBankModal");
 const brainBankList = document.getElementById("brainBankList");
@@ -203,6 +204,12 @@ const TROPHY_WORM_ASSET_PATH = "brain-bank/brain-bank/c-4555-g-188-age-07311f-20
 const TROPHY_WORM_ASSET_FILE_NAME = "c-4555-g-188-age-07311f-20260330-015153.json";
 const TROPHY_WORM_NAME = "Trophy Worm";
 const TROPHY_WORM_BUNDLE_KEY = "BUNDLED_TROPHY_WORM_PAYLOAD";
+const INFLUENCE_TOOL_DEFAULTS = Object.freeze({
+  radius: 152,
+  creatureImpulse: 0.78,
+  creatureSnap: 0.04,
+  foodPull: 0.28
+});
 
 const CONTROL_DEFS = [
   {
@@ -344,7 +351,15 @@ const state = {
   networkDisplay: null,
   startupScene: null,
   telemetryHistory: [],
-  telemetrySampleClock: 0
+  telemetrySampleClock: 0,
+  influenceTool: {
+    enabled: false,
+    pointerActive: false,
+    pointerId: null,
+    x: WIDTH * 0.5,
+    y: HEIGHT * 0.5,
+    radius: INFLUENCE_TOOL_DEFAULTS.radius
+  }
 };
 
 let trophyWormLoadPromise = null;
@@ -1185,6 +1200,116 @@ function getLivingCreaturesCount() {
     }
   }
   return count;
+}
+
+function canUseInfluenceTool() {
+  return !state.startupScene && !state.extinctionScene && !state.brainBankScene && !state.brainBankModalOpen;
+}
+
+function isInfluenceToolActive() {
+  return state.influenceTool.enabled && state.influenceTool.pointerActive && canUseInfluenceTool();
+}
+
+function updateInfluenceToolUi() {
+  if (!influenceToolButton) {
+    return;
+  }
+
+  if (!canUseInfluenceTool()) {
+    clearInfluencePointer();
+  }
+
+  const enabled = state.influenceTool.enabled;
+  influenceToolButton.textContent = enabled ? "SPHERE OF INFLUENCE ON" : "SPHERE OF INFLUENCE OFF";
+  influenceToolButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+  influenceToolButton.classList.toggle("is-active", enabled);
+  influenceToolButton.disabled = !canUseInfluenceTool();
+  worldCanvas.classList.toggle("influence-tool-active", enabled && canUseInfluenceTool());
+}
+
+function clearInfluencePointer() {
+  const activePointerId = state.influenceTool.pointerId;
+  if (activePointerId !== null && worldCanvas.hasPointerCapture) {
+    try {
+      if (worldCanvas.hasPointerCapture(activePointerId)) {
+        worldCanvas.releasePointerCapture(activePointerId);
+      }
+    } catch (error) {
+      // Pointer capture may already be gone; ignore and just clear local state.
+    }
+  }
+  state.influenceTool.pointerActive = false;
+  state.influenceTool.pointerId = null;
+}
+
+function getWorldPointerPosition(event) {
+  const rect = worldCanvas.getBoundingClientRect();
+  const normalizedX = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+  const normalizedY = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0;
+  return {
+    x: clamp(normalizedX * WIDTH, 0, WIDTH),
+    y: clamp(normalizedY * HEIGHT, 0, HEIGHT)
+  };
+}
+
+function updateInfluencePointer(event) {
+  const position = getWorldPointerPosition(event);
+  state.influenceTool.x = position.x;
+  state.influenceTool.y = position.y;
+}
+
+function handleInfluencePointerDown(event) {
+  if (!state.influenceTool.enabled || !canUseInfluenceTool()) {
+    return;
+  }
+
+  if (event.button !== undefined && event.button !== 0) {
+    return;
+  }
+
+  state.influenceTool.pointerActive = true;
+  state.influenceTool.pointerId = event.pointerId ?? null;
+  updateInfluencePointer(event);
+  event.preventDefault();
+  if (event.pointerId !== undefined && worldCanvas.setPointerCapture) {
+    try {
+      worldCanvas.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Some browsers can reject capture during rapid re-entry; keep the tool active anyway.
+    }
+  }
+}
+
+function handleInfluencePointerMove(event) {
+  if (!state.influenceTool.enabled || !state.influenceTool.pointerActive) {
+    return;
+  }
+
+  if (state.influenceTool.pointerId !== null && event.pointerId !== state.influenceTool.pointerId) {
+    return;
+  }
+
+  updateInfluencePointer(event);
+  event.preventDefault();
+}
+
+function handleInfluencePointerEnd(event) {
+  if (state.influenceTool.pointerId !== null && event.pointerId !== undefined && event.pointerId !== state.influenceTool.pointerId) {
+    return;
+  }
+
+  if (state.influenceTool.enabled) {
+    event.preventDefault();
+  }
+  clearInfluencePointer();
+}
+
+function toggleInfluenceTool() {
+  state.influenceTool.enabled = !state.influenceTool.enabled;
+  if (!state.influenceTool.enabled) {
+    clearInfluencePointer();
+  }
+  updateInfluenceToolUi();
 }
 
 function getTelemetrySnapshot() {
@@ -3600,6 +3725,97 @@ function updateFood() {
   }
 }
 
+function applyInfluenceField() {
+  if (!isInfluenceToolActive()) {
+    return;
+  }
+
+  const { x: centerX, y: centerY, radius } = state.influenceTool;
+  const radiusSq = radius * radius;
+
+  for (let i = 0; i < state.foods.length; i += 1) {
+    const food = state.foods[i];
+    const dx = centerX - food.x;
+    const dy = centerY - food.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > radiusSq) {
+      continue;
+    }
+
+    const distance = Math.max(0.001, Math.sqrt(distSq));
+    const strength = smooth01(1 - distance / radius);
+    const pull = 0.06 + strength * INFLUENCE_TOOL_DEFAULTS.foodPull;
+    food.x = clamp(lerp(food.x, centerX, pull), food.radius, WIDTH - food.radius);
+    food.y = clamp(lerp(food.y, centerY, pull), food.radius, HEIGHT - food.radius);
+  }
+
+  for (let i = 0; i < state.creatures.length; i += 1) {
+    const creature = state.creatures[i];
+    if (!creature.alive) {
+      continue;
+    }
+
+    const dx = centerX - creature.x;
+    const dy = centerY - creature.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > radiusSq) {
+      continue;
+    }
+
+    const distance = Math.max(0.001, Math.sqrt(distSq));
+    const angleToCenter = Math.atan2(dy, dx);
+    const strength = smooth01(1 - distance / radius);
+    const nx = dx / distance;
+    const ny = dy / distance;
+    const impulse = (0.08 + strength * INFLUENCE_TOOL_DEFAULTS.creatureImpulse) * (creature.lifeStage === "egg" ? 0.8 : 1);
+    const previousX = creature.x;
+    const previousY = creature.y;
+
+    creature.vx += nx * impulse;
+    creature.vy += ny * impulse;
+    creature.x = clamp(
+      creature.x + dx * (0.01 + strength * INFLUENCE_TOOL_DEFAULTS.creatureSnap),
+      creature.radius,
+      WIDTH - creature.radius
+    );
+    creature.y = clamp(
+      creature.y + dy * (0.01 + strength * INFLUENCE_TOOL_DEFAULTS.creatureSnap),
+      creature.radius,
+      HEIGHT - creature.radius
+    );
+    creature.heading = dampAngle(creature.heading, angleToCenter, 0.04 + strength * 0.12);
+    creature.turnVelocity *= 0.74;
+
+    const shiftX = creature.x - previousX;
+    const shiftY = creature.y - previousY;
+    if (shiftX !== 0 || shiftY !== 0) {
+      for (let segmentIndex = 0; segmentIndex < creature.segmentBodies.length; segmentIndex += 1) {
+        const segment = creature.segmentBodies[segmentIndex];
+        segment.x += shiftX * 0.92;
+        segment.y += shiftY * 0.92;
+        segment.vx += shiftX * 0.18;
+        segment.vy += shiftY * 0.18;
+      }
+    }
+
+    const speed = Math.hypot(creature.vx, creature.vy);
+    const maxInfluenceSpeed = CONFIG.maxSpeed * 1.6;
+    if (speed > maxInfluenceSpeed) {
+      const scale = maxInfluenceSpeed / speed;
+      creature.vx *= scale;
+      creature.vy *= scale;
+    }
+
+    if (creature.lifeStage !== "egg") {
+      relaxCreatureSegments(creature, 1);
+      resolveCreatureWallCollisions(creature);
+    } else {
+      creature.x = clamp(creature.x, creature.radius, WIDTH - creature.radius);
+      creature.y = clamp(creature.y, creature.radius, HEIGHT - creature.radius);
+    }
+  }
+}
+
 function cullDeadCreatures() {
   for (let i = state.creatures.length - 1; i >= 0; i -= 1) {
     if (!state.creatures[i].alive && state.creatures[i].deathTimer <= 0) {
@@ -3720,6 +3936,7 @@ function updateSimulation() {
     updateCreature(state.creatures[i]);
   }
 
+  applyInfluenceField();
   resolveCreatureCollisions();
   updateSparks();
   cullDeadCreatures();
@@ -5937,6 +6154,45 @@ function drawSparks() {
   }
 }
 
+function drawInfluenceField() {
+  if (!isInfluenceToolActive()) {
+    return;
+  }
+
+  const { x, y, radius } = state.influenceTool;
+  worldCtx.save();
+  const aura = worldCtx.createRadialGradient(x, y, 6, x, y, radius);
+  aura.addColorStop(0, "rgba(255, 241, 123, 0.18)");
+  aura.addColorStop(0.38, "rgba(255, 241, 123, 0.08)");
+  aura.addColorStop(0.72, "rgba(74, 255, 212, 0.05)");
+  aura.addColorStop(1, "rgba(74, 255, 212, 0)");
+  worldCtx.fillStyle = aura;
+  worldCtx.beginPath();
+  worldCtx.arc(x, y, radius, 0, TAU);
+  worldCtx.fill();
+
+  worldCtx.strokeStyle = "rgba(255, 241, 123, 0.62)";
+  worldCtx.lineWidth = 2;
+  worldCtx.setLineDash([12, 8]);
+  worldCtx.beginPath();
+  worldCtx.arc(x, y, radius, 0, TAU);
+  worldCtx.stroke();
+  worldCtx.setLineDash([]);
+
+  worldCtx.strokeStyle = "rgba(74, 255, 212, 0.72)";
+  worldCtx.lineWidth = 1;
+  worldCtx.beginPath();
+  worldCtx.moveTo(x - 14, y);
+  worldCtx.lineTo(x + 14, y);
+  worldCtx.moveTo(x, y - 14);
+  worldCtx.lineTo(x, y + 14);
+  worldCtx.stroke();
+
+  worldCtx.fillStyle = "#fff17b";
+  worldCtx.fillRect(Math.round(x) - 2, Math.round(y) - 2, 4, 4);
+  worldCtx.restore();
+}
+
 function drawStartupScene() {
   const scene = state.startupScene;
   if (!scene) {
@@ -6376,6 +6632,7 @@ function drawWorld() {
   drawFood();
   drawExtinctionScene();
   drawCreatures();
+  drawInfluenceField();
   drawSparks();
   drawBrainBankScene();
   drawStartupScene();
@@ -6906,6 +7163,7 @@ function updateStats() {
   runtimeStat.textContent = formatRunTimer(state.tick);
   lineageStat.textContent = formatRunTimer(state.lineageTick);
   updateBrainBankUi();
+  updateInfluenceToolUi();
 }
 
 let lastTime = 0;
@@ -6946,6 +7204,7 @@ function frame(timestamp) {
 }
 
 buildControlDeck();
+influenceToolButton.addEventListener("click", toggleInfluenceTool);
 resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
 spawnTrophyWormButton.addEventListener("click", () => {
@@ -6985,6 +7244,11 @@ brainBankFileInput.addEventListener("change", async () => {
     brainBankFileInput.value = "";
   }
 });
+worldCanvas.addEventListener("pointerdown", handleInfluencePointerDown);
+worldCanvas.addEventListener("pointermove", handleInfluencePointerMove);
+worldCanvas.addEventListener("pointerup", handleInfluencePointerEnd);
+worldCanvas.addEventListener("pointercancel", handleInfluencePointerEnd);
+worldCanvas.addEventListener("lostpointercapture", handleInfluencePointerEnd);
 window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
 window.addEventListener("keydown", unlockAudioContext);
 window.addEventListener("keydown", (event) => {
