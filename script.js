@@ -393,6 +393,66 @@ function quadraticPoint(a, b, c, t) {
   return oneMinusT * oneMinusT * a + 2 * oneMinusT * t * b + t * t * c;
 }
 
+function quadraticDerivative(a, b, c, t) {
+  return 2 * (1 - t) * (b - a) + 2 * t * (c - b);
+}
+
+function traceWigglyQuadraticPath(
+  ctx,
+  startX,
+  startY,
+  controlX,
+  controlY,
+  endX,
+  endY,
+  progress,
+  amplitude,
+  frequency,
+  phase
+) {
+  const cappedProgress = clamp(progress, 0, 1);
+  if (cappedProgress <= 0.001) {
+    return { x: startX, y: startY };
+  }
+
+  const steps = Math.max(6, Math.ceil(24 * cappedProgress));
+  let tipX = startX;
+  let tipY = startY;
+
+  ctx.beginPath();
+
+  for (let step = 0; step <= steps; step += 1) {
+    const localT = step / steps;
+    const t = cappedProgress * localT;
+    const baseX = quadraticPoint(startX, controlX, endX, t);
+    const baseY = quadraticPoint(startY, controlY, endY, t);
+    const tangentX = quadraticDerivative(startX, controlX, endX, t);
+    const tangentY = quadraticDerivative(startY, controlY, endY, t);
+    const tangentLength = Math.max(0.001, Math.hypot(tangentX, tangentY));
+    const normalX = -tangentY / tangentLength;
+    const normalY = tangentX / tangentLength;
+    const envelope = Math.sin(localT * Math.PI) ** 0.9;
+    const wiggle =
+      Math.sin(phase + t * Math.PI * frequency) *
+      amplitude *
+      envelope *
+      (0.38 + cappedProgress * 0.62);
+    const px = baseX + normalX * wiggle;
+    const py = baseY + normalY * wiggle;
+
+    if (step === 0) {
+      ctx.moveTo(px, py);
+    } else {
+      ctx.lineTo(px, py);
+    }
+
+    tipX = px;
+    tipY = py;
+  }
+
+  return { x: tipX, y: tipY };
+}
+
 function smooth01(value) {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
@@ -2962,8 +3022,8 @@ function summarizeBrainMutation(baseBrain, mutatedBrain) {
   let changedWeights = 0;
   let changedBiases = 0;
   let maxDelta = 0;
-  const weightHighlights = [];
-  const biasHighlights = [];
+  const allWeightHighlights = [];
+  const allBiasHighlights = [];
 
   for (let layerIndex = 0; layerIndex < mutatedBrain.weights.length; layerIndex += 1) {
     for (let rowIndex = 0; rowIndex < mutatedBrain.weights[layerIndex].length; rowIndex += 1) {
@@ -2975,7 +3035,7 @@ function summarizeBrainMutation(baseBrain, mutatedBrain) {
         if (Math.abs(delta) > 0.0001) {
           changedWeights += 1;
           maxDelta = Math.max(maxDelta, Math.abs(delta));
-          weightHighlights.push({ layerIndex, rowIndex, colIndex, delta });
+          allWeightHighlights.push({ layerIndex, rowIndex, colIndex, delta });
         }
       }
     }
@@ -2988,21 +3048,138 @@ function summarizeBrainMutation(baseBrain, mutatedBrain) {
       if (Math.abs(delta) > 0.0001) {
         changedBiases += 1;
         maxDelta = Math.max(maxDelta, Math.abs(delta));
-        biasHighlights.push({ layerIndex, nodeIndex, delta });
+        allBiasHighlights.push({ layerIndex, nodeIndex, delta });
       }
     }
   }
 
-  weightHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-  biasHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  allWeightHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  allBiasHighlights.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  const orderedMutations = allWeightHighlights
+    .map((highlight) => ({ ...highlight, type: "weight" }))
+    .concat(allBiasHighlights.map((highlight) => ({ ...highlight, type: "bias" })))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .map((highlight, orderIndex) => ({ ...highlight, orderIndex }));
 
   return {
     changedWeights,
     changedBiases,
     maxDelta,
-    weightHighlights: weightHighlights.slice(0, 6),
-    biasHighlights: biasHighlights.slice(0, 3)
+    orderedMutations,
+    weightHighlights: allWeightHighlights.slice(0, 6),
+    biasHighlights: allBiasHighlights.slice(0, 3)
   };
+}
+
+function getMutationEntryKey(type, layerIndex, rowOrNodeIndex, colIndex = 0) {
+  return type === "weight"
+    ? `w:${layerIndex}:${rowOrNodeIndex}:${colIndex}`
+    : `b:${layerIndex}:${rowOrNodeIndex}`;
+}
+
+function getOrderedMutationEntries(summary) {
+  if (!summary) {
+    return [];
+  }
+  if (Array.isArray(summary.orderedMutations) && summary.orderedMutations.length > 0) {
+    return summary.orderedMutations;
+  }
+
+  const ordered = summary.weightHighlights
+    .map((highlight) => ({ ...highlight, type: "weight" }))
+    .concat(summary.biasHighlights.map((highlight) => ({ ...highlight, type: "bias" })))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .map((highlight, orderIndex) => ({ ...highlight, orderIndex }));
+
+  summary.orderedMutations = ordered;
+  return ordered;
+}
+
+function getMutationSequenceState(summary, progress) {
+  if (!summary) {
+    return null;
+  }
+
+  const entries = getOrderedMutationEntries(summary);
+  if (entries.length === 0) {
+    return {
+      entries: [],
+      activeIndex: -1,
+      activeEntry: null,
+      completedCount: 0,
+      visibleCount: 0,
+      totalCount: 0,
+      lookup: new Map()
+    };
+  }
+
+  const normalizedProgress = clamp(progress, 0, 1);
+  const cursor = normalizedProgress * entries.length;
+  const entryStates = [];
+  const lookup = new Map();
+  let activeIndex = -1;
+  let completedCount = 0;
+  let visibleCount = 0;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const rawProgress = clamp(cursor - index, 0, 1);
+    const drawProgress = smooth01(clamp(rawProgress / 0.76, 0, 1));
+    const burnProgress = smooth01(clamp((rawProgress - 0.24) / 0.76, 0, 1));
+    const settleProgress = smooth01(clamp((rawProgress - 0.82) / 0.18, 0, 1));
+    const complete = rawProgress >= 0.999;
+    if (complete) {
+      completedCount += 1;
+    }
+    if (rawProgress > 0.001) {
+      visibleCount = index + 1;
+    }
+    if (activeIndex === -1 && rawProgress > 0.001 && rawProgress < 0.999) {
+      activeIndex = index;
+    }
+
+    const state = {
+      ...entry,
+      rawProgress,
+      drawProgress,
+      burnProgress,
+      settleProgress,
+      complete
+    };
+
+    lookup.set(
+      getMutationEntryKey(
+        entry.type,
+        entry.layerIndex,
+        entry.type === "weight" ? entry.rowIndex : entry.nodeIndex,
+        entry.type === "weight" ? entry.colIndex : 0
+      ),
+      state
+    );
+    entryStates.push(state);
+  }
+
+  if (normalizedProgress >= 1 && activeIndex === -1) {
+    activeIndex = entryStates.length - 1;
+  }
+
+  return {
+    entries: entryStates,
+    activeIndex,
+    activeEntry: activeIndex >= 0 ? entryStates[activeIndex] : null,
+    completedCount,
+    visibleCount,
+    totalCount: entryStates.length,
+    lookup
+  };
+}
+
+function getMutationEntryState(sequenceState, type, layerIndex, rowOrNodeIndex, colIndex = 0) {
+  if (!sequenceState) {
+    return null;
+  }
+  return sequenceState.lookup.get(getMutationEntryKey(type, layerIndex, rowOrNodeIndex, colIndex)) || null;
 }
 
 function buildExtinctionScene() {
@@ -3011,7 +3188,7 @@ function buildExtinctionScene() {
   const hasSourceBrain = Boolean(state.extinctionCandidateBrain);
   const inheritedSeeds = hasSourceBrain ? Math.min(4, seeds) : 0;
   const scanLeadFrames = hasSourceBrain ? 196 : 72;
-  const inheritedPlanFrames = hasSourceBrain ? 292 : 0;
+  const inheritedPlanFrames = hasSourceBrain ? 556 : 0;
   const randomPlanFrames = hasSourceBrain ? 48 : 72;
   const outroFrames = 96;
   const positions = buildIncubationPositions(seeds);
@@ -4018,6 +4195,7 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
   const fluxSelectorSpeed = options.fluxSelectorSpeed ?? 0.55;
   const nodePulseSpeed = options.nodePulseSpeed ?? 0.2;
   const nodePulseSelectorSpeed = options.nodePulseSelectorSpeed ?? 0.42;
+  const mutationSequenceState = options.mutationSequenceState || null;
   const time = options.time ?? state.tick;
   const blueprintLayout = getBrainBlueprintLayout(x, y, width, height);
   const nodeLayers = blueprintLayout.layers;
@@ -4032,7 +4210,18 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
         const baseWeight = baseBrain
           ? baseBrain.weights[layerIndex][rowIndex][colIndex]
           : targetWeight;
-        const weight = lerp(baseWeight, targetWeight, mix);
+        let weightMix = mix;
+        if (baseBrain && mutationSequenceState) {
+          const mutationState = getMutationEntryState(
+            mutationSequenceState,
+            "weight",
+            layerIndex,
+            rowIndex,
+            colIndex
+          );
+          weightMix = mutationState ? mutationState.drawProgress : 1;
+        }
+        const weight = lerp(baseWeight, targetWeight, weightMix);
         const strength = clamp(Math.abs(weight) * 0.24 + 0.02, 0.02, 0.42) * alpha;
         ctx.strokeStyle = weight >= 0
           ? `rgba(74, 255, 212, ${strength})`
@@ -4109,11 +4298,28 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
 
     for (let i = 0; i < mutationSummary.weightHighlights.length; i += 1) {
       const highlight = mutationSummary.weightHighlights[i];
+      const mutationState = mutationSequenceState
+        ? getMutationEntryState(
+          mutationSequenceState,
+          "weight",
+          highlight.layerIndex,
+          highlight.rowIndex,
+          highlight.colIndex
+        )
+        : null;
+      const reveal = mutationState ? mutationState.drawProgress : 1;
+      const burnProgress = mutationState ? mutationState.burnProgress : 1;
+      if (reveal <= 0.01) {
+        continue;
+      }
       const fromNode = nodeLayers[highlight.layerIndex][highlight.colIndex];
       const toNode = nodeLayers[highlight.layerIndex + 1][highlight.rowIndex];
       const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
-      const signal = normalized * mutationGlow * mutationPulse;
+      const settledGlow = mutationState?.complete ? 0.22 + mutationState.settleProgress * 0.28 : 0;
+      const signal = normalized * mutationGlow * mutationPulse * (0.14 + reveal * 0.7 + settledGlow);
       const positive = highlight.delta >= 0;
+      const lineEndX = lerp(fromNode.x, toNode.x, Math.max(0.06, burnProgress));
+      const lineEndY = lerp(fromNode.y, toNode.y, Math.max(0.06, burnProgress));
 
       ctx.shadowBlur = 4 + signal * 8;
       ctx.shadowColor = positive
@@ -4123,7 +4329,7 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
       ctx.lineWidth = 1.2 + normalized * 1.8 + signal * 1.1;
       ctx.beginPath();
       ctx.moveTo(fromNode.x, fromNode.y);
-      ctx.lineTo(toNode.x, toNode.y);
+      ctx.lineTo(lineEndX, lineEndY);
       ctx.stroke();
 
       ctx.strokeStyle = positive
@@ -4132,7 +4338,7 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
       ctx.lineWidth = 0.9 + normalized * 1.1 + signal * 0.9;
       ctx.beginPath();
       ctx.moveTo(fromNode.x, fromNode.y);
-      ctx.lineTo(toNode.x, toNode.y);
+      ctx.lineTo(lineEndX, lineEndY);
       ctx.stroke();
     }
   }
@@ -4189,28 +4395,43 @@ function drawBrainBlueprint(ctx, brain, x, y, width, height, options = {}) {
 
     for (let i = 0; i < mutationSummary.biasHighlights.length; i += 1) {
       const highlight = mutationSummary.biasHighlights[i];
+      const mutationState = mutationSequenceState
+        ? getMutationEntryState(
+          mutationSequenceState,
+          "bias",
+          highlight.layerIndex,
+          highlight.nodeIndex
+        )
+        : null;
+      const reveal = mutationState ? mutationState.drawProgress : 1;
+      if (reveal <= 0.01) {
+        continue;
+      }
       const node = nodeLayers[highlight.layerIndex + 1]?.[highlight.nodeIndex];
       if (!node) {
         continue;
       }
 
       const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
-      const signal = normalized * mutationGlow * nodePulse;
+      const settledGlow = mutationState?.complete ? 0.24 + mutationState.settleProgress * 0.22 : 0;
+      const signal = normalized * mutationGlow * nodePulse * (0.16 + reveal * 0.68 + settledGlow);
       const positive = highlight.delta >= 0;
+      const boxSize = 6 + reveal * 3 + normalized * 2;
+      const fillSize = 3 + reveal * 2;
 
       ctx.shadowBlur = 4 + signal * 8;
       ctx.shadowColor = positive
         ? `rgba(74, 255, 212, ${0.22 + signal * 0.42})`
         : `rgba(255, 109, 179, ${0.22 + signal * 0.42})`;
       ctx.fillStyle = `rgba(255, 241, 123, ${0.15 + signal * 0.28})`;
-      ctx.fillRect(node.x - 4, node.y - 4, 8, 8);
+      ctx.fillRect(node.x - boxSize * 0.5, node.y - boxSize * 0.5, boxSize, boxSize);
       ctx.strokeStyle = positive
         ? `rgba(74, 255, 212, ${0.35 + signal * 0.48})`
         : `rgba(255, 109, 179, ${0.35 + signal * 0.48})`;
       ctx.lineWidth = 1;
-      ctx.strokeRect(node.x - 3.5, node.y - 3.5, 7, 7);
+      ctx.strokeRect(node.x - (boxSize - 1) * 0.5, node.y - (boxSize - 1) * 0.5, boxSize - 1, boxSize - 1);
       ctx.fillStyle = `rgba(223, 252, 255, ${0.42 + signal * 0.36})`;
-      ctx.fillRect(node.x - 1, node.y - 1, 2, 2);
+      ctx.fillRect(node.x - fillSize * 0.5, node.y - fillSize * 0.5, fillSize, fillSize);
     }
   }
 
@@ -4249,7 +4470,7 @@ function formatBrainNodeRef(layerIndex, nodeIndex) {
   return `L${layerIndex + 1}N${String(nodeIndex + 1).padStart(2, "0")}`;
 }
 
-function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
+function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity, mutationSequenceState = null) {
   if (!summary || intensity <= 0.02) {
     return;
   }
@@ -4261,6 +4482,10 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
   for (let i = 0; i < weightHighlights.length; i += 1) {
     const highlight = weightHighlights[i];
     lines.push({
+      type: "weight",
+      layerIndex: highlight.layerIndex,
+      rowIndex: highlight.rowIndex,
+      colIndex: highlight.colIndex,
       color: highlight.delta >= 0 ? "74, 255, 212" : "255, 109, 179",
       text: `${String(i + 1).padStart(2, "0")} ${formatBrainNodeRef(highlight.layerIndex, highlight.colIndex)}>${formatBrainNodeRef(highlight.layerIndex + 1, highlight.rowIndex)} ${highlight.delta >= 0 ? "+" : ""}${highlight.delta.toFixed(2)}`
     });
@@ -4269,6 +4494,9 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
   for (let i = 0; i < biasHighlights.length; i += 1) {
     const highlight = biasHighlights[i];
     lines.push({
+      type: "bias",
+      layerIndex: highlight.layerIndex,
+      nodeIndex: highlight.nodeIndex,
       color: highlight.delta >= 0 ? "74, 255, 212" : "255, 109, 179",
       text: `B${i + 1} ${formatBrainNodeRef(highlight.layerIndex + 1, highlight.nodeIndex)} BIAS ${highlight.delta >= 0 ? "+" : ""}${highlight.delta.toFixed(2)}`
     });
@@ -4295,9 +4523,28 @@ function drawBrainStitchLedger(ctx, summary, centerX, topY, width, intensity) {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     const lineY = topY + 28 + i * lineHeight;
-    ctx.fillStyle = `rgba(${line.color}, ${0.24 + intensity * 0.42})`;
+    const mutationState = mutationSequenceState
+      ? getMutationEntryState(
+        mutationSequenceState,
+        line.type,
+        line.layerIndex,
+        line.type === "weight" ? line.rowIndex : line.nodeIndex,
+        line.type === "weight" ? line.colIndex : 0
+      )
+      : null;
+    const lineReveal = mutationState
+      ? clamp(mutationState.drawProgress * 0.7 + mutationState.settleProgress * 0.3, 0, 1)
+      : 1;
+
+    if (mutationSequenceState && lineReveal <= 0.01) {
+      ctx.fillStyle = `rgba(102, 220, 255, ${0.04 + intensity * 0.04})`;
+      ctx.fillRect(boxX + 8, lineY - 3, Math.max(24, Math.round(width * 0.22)), 1);
+      continue;
+    }
+
+    ctx.fillStyle = `rgba(${line.color}, ${(0.18 + intensity * 0.34) * lineReveal})`;
     ctx.fillRect(boxX + 8, lineY - 5, 5, 5);
-    ctx.fillStyle = `rgba(221, 250, 255, ${0.64 + intensity * 0.18})`;
+    ctx.fillStyle = `rgba(221, 250, 255, ${(0.34 + intensity * 0.48) * lineReveal})`;
     ctx.fillText(line.text, boxX + 18, lineY);
   }
 
@@ -4316,7 +4563,8 @@ function drawBrainStitching(
   targetW,
   targetH,
   intensity,
-  time
+  time,
+  mutationSequenceState = null
 ) {
   if (!summary || intensity <= 0.02) {
     return;
@@ -4336,6 +4584,21 @@ function drawBrainStitching(
 
   for (let i = 0; i < stitchHighlights.length; i += 1) {
     const highlight = stitchHighlights[i];
+    const mutationState = mutationSequenceState
+      ? getMutationEntryState(
+        mutationSequenceState,
+        "weight",
+        highlight.layerIndex,
+        highlight.rowIndex,
+        highlight.colIndex
+      )
+      : null;
+    const reveal = mutationState ? mutationState.drawProgress : 1;
+    const burnProgress = mutationState ? mutationState.burnProgress : 1;
+    const settled = mutationState ? mutationState.settleProgress : 1;
+    if (mutationState && reveal <= 0.01) {
+      continue;
+    }
     const sourceFrom = sourceLayers[highlight.layerIndex][highlight.colIndex];
     const sourceTo = sourceLayers[highlight.layerIndex + 1][highlight.rowIndex];
     const targetFrom = targetLayers[highlight.layerIndex][highlight.colIndex];
@@ -4350,37 +4613,45 @@ function drawBrainStitching(
     };
     const positive = highlight.delta >= 0;
     const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
-    const threadAlpha = 0.12 + intensity * 0.26 + normalized * 0.14;
-    const warp = Math.sin(time * 0.08 + i * 0.75) * (8 + intensity * 12);
-    const controlX = lerp(sourceMid.x, targetMid.x, 0.5);
-    const controlY = lerp(sourceMid.y, targetMid.y, 0.5) + warp;
-    const stitchT = (time * 0.009 + i * 0.13) % 1;
-    const echoT = (stitchT + 0.76) % 1;
-    const packetX =
-      (1 - stitchT) * (1 - stitchT) * sourceMid.x +
-      2 * (1 - stitchT) * stitchT * controlX +
-      stitchT * stitchT * targetMid.x;
-    const packetY =
-      (1 - stitchT) * (1 - stitchT) * sourceMid.y +
-      2 * (1 - stitchT) * stitchT * controlY +
-      stitchT * stitchT * targetMid.y;
-    const echoPacketX =
-      (1 - echoT) * (1 - echoT) * sourceMid.x +
-      2 * (1 - echoT) * echoT * controlX +
-      echoT * echoT * targetMid.x;
-    const echoPacketY =
-      (1 - echoT) * (1 - echoT) * sourceMid.y +
-      2 * (1 - echoT) * echoT * controlY +
-      echoT * echoT * targetMid.y;
-    const orbitAngle = time * 0.15 + i * 1.2;
-    const orbitRadius = 5 + normalized * 4 + intensity * 2;
+    const revealAlpha = 0.18 + reveal * 0.62 + settled * 0.2;
+    const threadAlpha = (0.08 + intensity * 0.22 + normalized * 0.12) * revealAlpha;
+    const bridgeWarp = Math.sin(time * 0.026 + i * 0.52) * (4 + intensity * 6);
+    const bridgeControlX = lerp(sourceMid.x, targetMid.x, 0.5);
+    const bridgeControlY = lerp(sourceMid.y, targetMid.y, 0.5) + bridgeWarp;
+    const activeBurning = mutationState ? !mutationState.complete && burnProgress > 0.02 : burnProgress < 0.999;
+    const targetDx = targetTo.x - targetFrom.x;
+    const targetDy = targetTo.y - targetFrom.y;
+    const targetLength = Math.max(0.001, Math.hypot(targetDx, targetDy));
+    const targetNormalX = -targetDy / targetLength;
+    const targetNormalY = targetDx / targetLength;
+    const burnCurve = (positive ? 1 : -1) * (3 + normalized * 3 + (mutationState && !mutationState.complete ? 2.5 : 1.4));
+    const targetControlX = lerp(targetFrom.x, targetTo.x, 0.5) + targetNormalX * burnCurve;
+    const targetControlY = lerp(targetFrom.y, targetTo.y, 0.5) + targetNormalY * burnCurve;
+    const targetBurnProgress = smooth01(clamp((burnProgress - 0.18) / 0.82, 0, 1));
+    const targetTipOuter = activeBurning && targetBurnProgress > 0.01
+      ? traceWigglyQuadraticPath(
+        ctx,
+        targetFrom.x,
+        targetFrom.y,
+        targetControlX,
+        targetControlY,
+        targetTo.x,
+        targetTo.y,
+        targetBurnProgress,
+        1.4 + normalized * 1.5 + intensity,
+        4,
+        time * 0.055 + i * 0.48 + 0.7
+      )
+      : null;
+    const orbitAngle = time * 0.06 + i * 1.2;
+    const orbitRadius = 5 + normalized * 4 + intensity * 2 + settled * 1.5;
     const orbitX = targetMid.x + Math.cos(orbitAngle) * orbitRadius;
     const orbitY = targetMid.y + Math.sin(orbitAngle) * orbitRadius * 0.7;
     const glyphX = Math.round(targetMid.x + 7 + normalized * 2);
     const glyphY = Math.round(targetMid.y - 6);
     const tag = String(i + 1).padStart(2, "0");
 
-    ctx.strokeStyle = `rgba(255, 241, 123, ${0.06 + intensity * 0.14})`;
+    ctx.strokeStyle = `rgba(255, 241, 123, ${(0.04 + intensity * 0.1) * revealAlpha})`;
     ctx.beginPath();
     ctx.moveTo(sourceFrom.x, sourceFrom.y);
     ctx.lineTo(targetFrom.x, targetFrom.y);
@@ -4390,34 +4661,65 @@ function drawBrainStitching(
     ctx.lineTo(targetTo.x, targetTo.y);
     ctx.stroke();
 
-    ctx.strokeStyle = `rgba(255, 241, 123, ${0.08 + intensity * 0.16})`;
-    ctx.lineWidth = 1 + normalized * 0.35;
-    ctx.beginPath();
-    ctx.moveTo(sourceMid.x, sourceMid.y);
-    ctx.quadraticCurveTo(controlX, controlY, targetMid.x, targetMid.y);
-    ctx.stroke();
+    if (activeBurning) {
+      ctx.strokeStyle = `rgba(255, 241, 123, ${(0.08 + intensity * 0.1) * revealAlpha})`;
+      ctx.lineWidth = 1 + normalized * 0.2 + reveal * 0.3;
+      ctx.beginPath();
+      ctx.moveTo(sourceMid.x, sourceMid.y);
+      ctx.quadraticCurveTo(bridgeControlX, bridgeControlY, targetFrom.x, targetFrom.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = positive
+        ? `rgba(74, 255, 212, ${threadAlpha * 0.88})`
+        : `rgba(255, 109, 179, ${threadAlpha * 0.88})`;
+      ctx.lineWidth = 0.95 + normalized * 0.5 + intensity * 0.2;
+      ctx.beginPath();
+      ctx.moveTo(sourceMid.x, sourceMid.y);
+      ctx.quadraticCurveTo(bridgeControlX, bridgeControlY, targetFrom.x, targetFrom.y);
+      ctx.stroke();
+    }
+
+    if (activeBurning && targetBurnProgress > 0.01) {
+      ctx.strokeStyle = `rgba(255, 241, 123, ${(0.12 + intensity * 0.18 + normalized * 0.12) * revealAlpha})`;
+      ctx.lineWidth = 1 + normalized * 0.3 + targetBurnProgress * 0.8;
+      traceWigglyQuadraticPath(
+        ctx,
+        targetFrom.x,
+        targetFrom.y,
+        targetControlX,
+        targetControlY,
+        targetTo.x,
+        targetTo.y,
+        targetBurnProgress,
+        1.4 + normalized * 1.5 + intensity,
+        4,
+        time * 0.055 + i * 0.48 + 0.7
+      );
+      ctx.stroke();
+
+      ctx.strokeStyle = positive
+        ? `rgba(74, 255, 212, ${(0.16 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`
+        : `rgba(255, 109, 179, ${(0.16 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`;
+      ctx.lineWidth = 0.9 + normalized * 0.6 + targetBurnProgress * 0.6;
+      traceWigglyQuadraticPath(
+        ctx,
+        targetFrom.x,
+        targetFrom.y,
+        targetControlX,
+        targetControlY,
+        targetTo.x,
+        targetTo.y,
+        targetBurnProgress,
+        1.1 + normalized * 1.2 + intensity * 0.74,
+        4,
+        time * 0.055 + i * 0.48 + 1.05
+      );
+      ctx.stroke();
+    }
 
     ctx.strokeStyle = positive
-      ? `rgba(74, 255, 212, ${threadAlpha})`
-      : `rgba(255, 109, 179, ${threadAlpha})`;
-    ctx.lineWidth = 0.9 + normalized * 0.9 + intensity * 0.7;
-    ctx.beginPath();
-    ctx.moveTo(sourceMid.x, sourceMid.y);
-    ctx.quadraticCurveTo(controlX, controlY, targetMid.x, targetMid.y);
-    ctx.stroke();
-
-    ctx.strokeStyle = positive
-      ? `rgba(74, 255, 212, ${0.12 + intensity * 0.18 + normalized * 0.18})`
-      : `rgba(255, 109, 179, ${0.12 + intensity * 0.18 + normalized * 0.18})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(targetMid.x, targetMid.y);
-    ctx.lineTo(orbitX, orbitY);
-    ctx.stroke();
-
-    ctx.strokeStyle = positive
-      ? `rgba(74, 255, 212, ${0.1 + intensity * 0.16 + normalized * 0.16})`
-      : `rgba(255, 109, 179, ${0.1 + intensity * 0.16 + normalized * 0.16})`;
+      ? `rgba(74, 255, 212, ${(0.1 + intensity * 0.16 + normalized * 0.16) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.1 + intensity * 0.16 + normalized * 0.16) * revealAlpha})`;
     ctx.strokeRect(
       targetMid.x - 2 - normalized * 2,
       targetMid.y - 2 - normalized,
@@ -4425,41 +4727,59 @@ function drawBrainStitching(
       4 + normalized * 2
     );
 
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.14 + intensity * 0.18 + normalized * 0.12})`;
+    ctx.strokeStyle = positive
+      ? `rgba(74, 255, 212, ${(0.12 + intensity * 0.18 + normalized * 0.18) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.12 + intensity * 0.18 + normalized * 0.18) * revealAlpha})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(targetMid.x, targetMid.y);
+    ctx.lineTo(orbitX, orbitY);
+    ctx.stroke();
+
+    ctx.fillStyle = `rgba(255, 241, 123, ${(0.14 + intensity * 0.18 + normalized * 0.12) * revealAlpha})`;
     ctx.fillRect(sourceFrom.x - 3, sourceFrom.y - 3, 6, 6);
     ctx.fillRect(sourceTo.x - 3, sourceTo.y - 3, 6, 6);
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.16 + intensity * 0.2 + normalized * 0.18})`
-      : `rgba(255, 109, 179, ${0.16 + intensity * 0.2 + normalized * 0.18})`;
+      ? `rgba(74, 255, 212, ${(0.16 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.16 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`;
     ctx.fillRect(targetFrom.x - 3, targetFrom.y - 3, 6, 6);
     ctx.fillRect(targetTo.x - 3, targetTo.y - 3, 6, 6);
 
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.2 + intensity * 0.28})`;
-    ctx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.12 + intensity * 0.18})`;
-    ctx.fillRect(Math.round(echoPacketX) - 1, Math.round(echoPacketY) - 1, 2, 2);
+    if (activeBurning) {
+      const bridgeTipT = smooth01(clamp((burnProgress - 0.04) / 0.28, 0, 1));
+      const bridgeTipX = quadraticPoint(sourceMid.x, bridgeControlX, targetFrom.x, bridgeTipT);
+      const bridgeTipY = quadraticPoint(sourceMid.y, bridgeControlY, targetFrom.y, bridgeTipT);
+      ctx.fillStyle = `rgba(255, 241, 123, ${(0.18 + intensity * 0.22) * revealAlpha})`;
+      ctx.fillRect(Math.round(bridgeTipX) - 1.5, Math.round(bridgeTipY) - 1.5, 3, 3);
+    }
+    if (activeBurning && targetTipOuter) {
+      ctx.fillStyle = positive
+        ? `rgba(74, 255, 212, ${(0.2 + intensity * 0.22 + normalized * 0.18) * revealAlpha})`
+        : `rgba(255, 109, 179, ${(0.2 + intensity * 0.22 + normalized * 0.18) * revealAlpha})`;
+      ctx.fillRect(Math.round(targetTipOuter.x) - 2, Math.round(targetTipOuter.y) - 2, 4, 4);
+    }
 
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.2 + normalized * 0.18})`
-      : `rgba(255, 109, 179, ${0.18 + intensity * 0.2 + normalized * 0.18})`;
+      ? `rgba(74, 255, 212, ${(0.18 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.18 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`;
     ctx.fillRect(Math.round(orbitX) - 1, Math.round(orbitY) - 1, 3, 3);
 
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.22})`
-      : `rgba(255, 109, 179, ${0.18 + intensity * 0.22})`;
+      ? `rgba(74, 255, 212, ${(0.18 + intensity * 0.22) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.18 + intensity * 0.22) * revealAlpha})`;
     ctx.fillRect(glyphX - 2, glyphY, 5, 1);
     if (positive) {
       ctx.fillRect(glyphX, glyphY - 2, 1, 5);
     }
 
-    ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
+    ctx.fillStyle = `rgba(5, 15, 24, ${(0.52 + intensity * 0.24) * revealAlpha})`;
     ctx.fillRect(sourceFrom.x - 8, sourceFrom.y - 12, 16, 8);
     ctx.fillRect(targetTo.x - 8, targetTo.y - 12, 16, 8);
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.24})`;
+    ctx.fillStyle = `rgba(255, 241, 123, ${(0.36 + intensity * 0.44) * revealAlpha})`;
     ctx.fillText(tag, sourceFrom.x, sourceFrom.y - 6);
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.58 + intensity * 0.24})`
-      : `rgba(255, 109, 179, ${0.58 + intensity * 0.24})`;
+      ? `rgba(74, 255, 212, ${(0.38 + intensity * 0.44) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.38 + intensity * 0.44) * revealAlpha})`;
     ctx.fillText(tag, targetTo.x, targetTo.y - 6);
   }
 
@@ -4471,47 +4791,100 @@ function drawBrainStitching(
       continue;
     }
 
+    const mutationState = mutationSequenceState
+      ? getMutationEntryState(
+        mutationSequenceState,
+        "bias",
+        highlight.layerIndex,
+        highlight.nodeIndex
+      )
+      : null;
+    const reveal = mutationState ? mutationState.drawProgress : 1;
+    const burnProgress = mutationState ? mutationState.burnProgress : 1;
+    const settled = mutationState ? mutationState.settleProgress : 1;
+    if (mutationState && reveal <= 0.01) {
+      continue;
+    }
+
     const normalized = clamp(Math.abs(highlight.delta) / maxMutation, 0, 1);
     const positive = highlight.delta >= 0;
-    const pulse = 0.5 + Math.sin(time * 0.22 + i * 0.9) * 0.5;
-    const packetT = (time * 0.013 + i * 0.2) % 1;
-    const packetX = lerp(sourceNode.x, targetNode.x, packetT);
-    const packetY = lerp(sourceNode.y, targetNode.y, packetT);
+    const pulse = 0.5 + Math.sin(time * 0.08 + i * 0.9) * 0.5;
+    const revealAlpha = 0.18 + reveal * 0.62 + settled * 0.2;
+    const activeBurning = mutationState ? !mutationState.complete && burnProgress > 0.02 : burnProgress < 0.999;
+    const biasDx = targetNode.x - sourceNode.x;
+    const biasDy = targetNode.y - sourceNode.y;
+    const biasLength = Math.max(0.001, Math.hypot(biasDx, biasDy));
+    const biasNormalX = -biasDy / biasLength;
+    const biasNormalY = biasDx / biasLength;
+    const biasControlX = lerp(sourceNode.x, targetNode.x, 0.5) + biasNormalX * (positive ? 8 : -8);
+    const biasControlY = lerp(sourceNode.y, targetNode.y, 0.5) + biasNormalY * (positive ? 8 : -8);
+    const biasBurnProgress = smooth01(clamp((burnProgress - 0.18) / 0.82, 0, 1));
+    const biasTip = activeBurning && biasBurnProgress > 0.01
+      ? traceWigglyQuadraticPath(
+        ctx,
+        sourceNode.x,
+        sourceNode.y,
+        biasControlX,
+        biasControlY,
+        targetNode.x,
+        targetNode.y,
+        biasBurnProgress,
+        1.1 + normalized * 1.2 + intensity * 0.8,
+        4,
+        time * 0.06 + i * 0.56
+      )
+      : null;
+    const ringSize = 6 + normalized * 4 + burnProgress * 3;
     const tag = `B${i + 1}`;
 
-    ctx.strokeStyle = `rgba(255, 241, 123, ${0.12 + intensity * 0.18 + pulse * 0.07})`;
-    ctx.beginPath();
-    ctx.moveTo(sourceNode.x, sourceNode.y);
-    ctx.lineTo(targetNode.x, targetNode.y);
-    ctx.stroke();
+    if (activeBurning && biasBurnProgress > 0.01) {
+      ctx.strokeStyle = `rgba(255, 241, 123, ${(0.12 + intensity * 0.18 + pulse * 0.07) * revealAlpha})`;
+      ctx.lineWidth = 1 + normalized * 0.35 + reveal * 0.55;
+      traceWigglyQuadraticPath(
+        ctx,
+        sourceNode.x,
+        sourceNode.y,
+        biasControlX,
+        biasControlY,
+        targetNode.x,
+        targetNode.y,
+        biasBurnProgress,
+        1.1 + normalized * 1.2 + intensity * 0.8,
+        4,
+        time * 0.06 + i * 0.56
+      );
+      ctx.stroke();
+    }
 
     ctx.strokeStyle = positive
-      ? `rgba(74, 255, 212, ${0.12 + intensity * 0.16 + normalized * 0.18})`
-      : `rgba(255, 109, 179, ${0.12 + intensity * 0.16 + normalized * 0.18})`;
+      ? `rgba(74, 255, 212, ${(0.12 + intensity * 0.16 + normalized * 0.18) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.12 + intensity * 0.16 + normalized * 0.18) * revealAlpha})`;
     ctx.strokeRect(
-      targetNode.x - 3 - normalized * 2,
-      targetNode.y - 3 - normalized * 2,
-      6 + normalized * 4,
-      6 + normalized * 4
+      targetNode.x - ringSize * 0.5,
+      targetNode.y - ringSize * 0.5,
+      ringSize,
+      ringSize
     );
 
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.18 + intensity * 0.22 + pulse * 0.08})`;
-    ctx.fillRect(Math.round(packetX) - 1, Math.round(packetY) - 1, 3, 3);
+    if (biasTip) {
+      ctx.fillStyle = `rgba(255, 241, 123, ${(0.18 + intensity * 0.22 + pulse * 0.08) * revealAlpha})`;
+      ctx.fillRect(Math.round(biasTip.x) - 2, Math.round(biasTip.y) - 2, 4, 4);
+    }
 
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.16 + intensity * 0.18 + pulse * 0.08})`;
+    ctx.fillStyle = `rgba(255, 241, 123, ${(0.16 + intensity * 0.18 + pulse * 0.08) * revealAlpha})`;
     ctx.fillRect(sourceNode.x - 3, sourceNode.y - 3, 6, 6);
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.18 + intensity * 0.2 + normalized * 0.18})`
-      : `rgba(255, 109, 179, ${0.18 + intensity * 0.2 + normalized * 0.18})`;
+      ? `rgba(74, 255, 212, ${(0.18 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.18 + intensity * 0.2 + normalized * 0.18) * revealAlpha})`;
     ctx.fillRect(targetNode.x - 3, targetNode.y - 3, 6, 6);
-    ctx.fillStyle = `rgba(5, 15, 24, ${0.68 + intensity * 0.12})`;
+    ctx.fillStyle = `rgba(5, 15, 24, ${(0.52 + intensity * 0.24) * revealAlpha})`;
     ctx.fillRect(sourceNode.x - 8, sourceNode.y - 12, 16, 8);
     ctx.fillRect(targetNode.x - 8, targetNode.y - 12, 16, 8);
-    ctx.fillStyle = `rgba(255, 241, 123, ${0.56 + intensity * 0.22})`;
+    ctx.fillStyle = `rgba(255, 241, 123, ${(0.36 + intensity * 0.42) * revealAlpha})`;
     ctx.fillText(tag, sourceNode.x, sourceNode.y - 6);
     ctx.fillStyle = positive
-      ? `rgba(74, 255, 212, ${0.56 + intensity * 0.24})`
-      : `rgba(255, 109, 179, ${0.56 + intensity * 0.24})`;
+      ? `rgba(74, 255, 212, ${(0.36 + intensity * 0.44) * revealAlpha})`
+      : `rgba(255, 109, 179, ${(0.36 + intensity * 0.44) * revealAlpha})`;
     ctx.fillText(tag, targetNode.x, targetNode.y - 6);
   }
 
@@ -4526,9 +4899,9 @@ function getExtinctionPlanProgress(scene, slotTiming, plan) {
     ? {
       build: 32,
       buildPause: 14,
-      mutate: 38,
+      mutate: 396,
       mutatePause: 16,
-      preview: 120,
+      preview: 26,
       pack: 18,
       travel: 24,
       implant: 18
@@ -5200,6 +5573,9 @@ function drawExtinctionScene() {
   const activePlanState = activePlan
     ? getExtinctionPlanProgress(scene, activeSlotTiming, activePlan)
     : null;
+  const mutationSequenceState = activePlan?.inherited
+    ? getMutationSequenceState(activePlan.mutationSummary, activePlanState.mutationProgress)
+    : null;
   const scanProgress = scene.sourceBrain ? smooth01(clamp(scene.frame / Math.max(1, scanFrames), 0, 1)) : 1;
   const sourceSpecimenPullProgress = scene.sourceSpecimen
     ? smooth01(clamp((scanProgress - 0.06) / 0.46, 0, 1))
@@ -5279,7 +5655,7 @@ function drawExtinctionScene() {
         : "SYNTHESIS PATTERN LOCKED // PRE-IMPLANT HOLD";
     } else {
       detailLabel = activePlan.inherited
-        ? "LEGACY STITCH MAP + LIVE MUTATION EDITS"
+        ? "LEGACY STITCH MAP // SEQUENTIAL MUTATION BURN-IN"
         : "RANDOM BRAIN SYNTHESIS";
     }
   }
@@ -5683,9 +6059,10 @@ function drawExtinctionScene() {
       drawBrainBlueprint(worldCtx, activePlan.brain, stitchTargetX, stitchY, stitchTargetW, stitchH, {
         alpha: 0.28 + activePlanState.buildProgress * 0.72,
         baseBrain: scene.sourceBrain,
-        mix: activePlanState.mutationProgress,
+        mix: 1,
         mutationSummary: activePlan.mutationSummary,
         mutationGlow: activePlanState.mutationProgress * (0.65 + flashPulse * 0.35),
+        mutationSequenceState,
         fluxAmount: chamberFlux * 0.52,
         fluxPacketBudget: 7,
         nodePulseBudget: 4,
@@ -5709,7 +6086,8 @@ function drawExtinctionScene() {
         stitchTargetW,
         stitchH,
         activePlanState.mutationProgress * (0.7 + flashPulse * 0.3),
-        scene.frame
+        scene.frame,
+        mutationSequenceState
       );
 
       drawMutationTelemetry(
@@ -5726,7 +6104,8 @@ function drawExtinctionScene() {
         forgeCenterX,
         ledgerTop,
         forgeW - 20,
-        activePlanState.mutationProgress * (0.76 + flashPulse * 0.24)
+        activePlanState.mutationProgress * (0.76 + flashPulse * 0.24),
+        mutationSequenceState
       );
     } else {
       drawRandomBrainGenesis(
