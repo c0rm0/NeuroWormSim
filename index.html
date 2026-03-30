@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Retro Neural Evolution Lab</title>
+  <title>NeuroWormSim</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
     <header class="hud-bar panel">
       <div class="branding">
         <p class="eyebrow">AUTONOMOUS BIOSPHERE // PIXEL SIGNAL</p>
-        <h1>Retro Neural Evolution Lab</h1>
-        <p class="tagline">Creatures learn to survive through sight, motion, hunger, collisions, and mutation.</p>
+        <h1>NeuroWormSim</h1>
+        <p class="tagline">Worms learn to survive through sight, motion, hunger, collisions, and mutation.</p>
       </div>
       <div class="status-strip">
         <div class="status-card">
@@ -85,6 +85,11 @@
           </div>
           <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
           <div id="creatureDetails" class="creature-details"></div>
+          <div class="brain-bank-actions">
+            <button id="sampleLongestButton" class="retro-button" type="button">SAMPLE LONGEST-LIVED</button>
+            <button id="openBrainBankButton" class="retro-button retro-button-quiet" type="button">OPEN BRAIN BANK</button>
+          </div>
+          <p id="brainBankStatus" class="brain-bank-status">No preserved specimens stored yet.</p>
         </section>
 
         <section class="panel legend-panel">
@@ -119,6 +124,42 @@
       </aside>
     </main>
   </div>
+
+  <div id="brainBankModal" class="brain-bank-modal" hidden>
+    <div class="brain-bank-shell">
+      <aside class="brain-bank-monitor panel" aria-label="Closed habitat monitor">
+        <div class="brain-bank-monitor-copy">
+          <p class="eyebrow">CLOSED HABITAT // LIVE FEED</p>
+          <h2>Closed Habitat</h2>
+          <p>Live miniature of the sealed ecosystem while the brain vault is open.</p>
+        </div>
+        <div class="brain-bank-monitor-frame">
+          <canvas id="brainBankHabitatCanvas" width="420" height="284" aria-label="Miniature live view of the closed habitat"></canvas>
+          <div class="brain-bank-monitor-strip">
+            <span id="brainBankHabitatPopulation">POP 00</span>
+            <span id="brainBankHabitatOldest">OLDEST --</span>
+            <span id="brainBankHabitatStored">BANK 00</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="brain-bank-dialog panel" role="dialog" aria-modal="true" aria-labelledby="brainBankTitle">
+        <div class="brain-bank-header">
+          <div>
+            <p class="eyebrow">ARCHIVE VAULT // NEURAL SPECIMENS</p>
+            <h2 id="brainBankTitle">Brain Bank</h2>
+            <p id="brainBankSubtitle">Sample the longest-lived creature, save its brain to a file, and release stored clones back into the habitat.</p>
+          </div>
+          <div class="brain-bank-header-actions">
+            <button id="importBrainButton" class="retro-button" type="button">IMPORT BRAIN FILE</button>
+            <button id="closeBrainBankButton" class="retro-button retro-button-quiet" type="button">CLOSE</button>
+          </div>
+        </div>
+        <div id="brainBankList" class="brain-bank-list"></div>
+      </div>
+    </div>
+  </div>
+  <input id="brainBankFileInput" type="file" accept="application/json,.json" multiple hidden>
 
   <script src="script.js"></script>
 </body>

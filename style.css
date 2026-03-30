@@ -535,6 +535,29 @@ canvas {
   margin-top: 14px;
 }
 
+.brain-bank-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+.brain-bank-status {
+  position: relative;
+  z-index: 1;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(102, 220, 255, 0.14);
+  background: rgba(9, 18, 29, 0.72);
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .retro-button {
   width: 100%;
   border: 1px solid rgba(102, 220, 255, 0.22);
@@ -551,6 +574,255 @@ canvas {
 .retro-button:hover {
   border-color: rgba(255, 241, 123, 0.32);
   box-shadow: 0 0 16px rgba(255, 241, 123, 0.16);
+}
+
+.retro-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  color: rgba(221, 250, 255, 0.48);
+  box-shadow: none;
+}
+
+.retro-button-quiet {
+  color: var(--text);
+}
+
+.brain-bank-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(52, 169, 140, 0.12), transparent 26%),
+    radial-gradient(circle at 80% 18%, rgba(255, 109, 179, 0.14), transparent 24%),
+    rgba(2, 8, 14, 0.82);
+}
+
+.brain-bank-modal[hidden] {
+  display: none;
+}
+
+.brain-bank-shell {
+  width: min(1660px, calc(100vw - 36px));
+  display: grid;
+  grid-template-columns: minmax(320px, 0.52fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.brain-bank-monitor {
+  padding: 18px;
+}
+
+.brain-bank-monitor-copy {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 12px;
+}
+
+.brain-bank-monitor-copy h2 {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.brain-bank-monitor-copy p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.brain-bank-monitor-frame {
+  position: relative;
+  z-index: 1;
+  border: 2px solid rgba(98, 228, 255, 0.18);
+  background:
+    linear-gradient(180deg, rgba(8, 20, 34, 0.92), rgba(2, 7, 12, 0.98)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 12px);
+  padding: 12px;
+}
+
+.brain-bank-monitor-frame canvas {
+  width: 100%;
+  border: 2px solid rgba(102, 220, 255, 0.16);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(50, 152, 215, 0.12), transparent 58%),
+    linear-gradient(180deg, rgba(6, 15, 24, 0.96), rgba(2, 8, 13, 0.99));
+}
+
+.brain-bank-monitor-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.brain-bank-monitor-strip span {
+  display: block;
+  padding: 6px 8px;
+  border: 1px solid rgba(102, 220, 255, 0.14);
+  background: rgba(4, 10, 17, 0.76);
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.brain-bank-dialog {
+  max-height: min(90vh, 940px);
+  padding: 22px;
+  overflow: auto;
+}
+
+.brain-bank-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.brain-bank-header h2 {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.brain-bank-header p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.brain-bank-header-actions {
+  display: grid;
+  gap: 10px;
+  width: min(240px, 100%);
+}
+
+.brain-bank-list {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+}
+
+.brain-bank-card,
+.brain-bank-empty {
+  background: rgba(9, 18, 29, 0.82);
+  border: 1px solid rgba(102, 220, 255, 0.16);
+  padding: 14px;
+}
+
+.brain-bank-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brain-bank-card-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.96rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brain-bank-card-copy {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.brain-bank-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 82px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 241, 123, 0.22);
+  background: rgba(255, 241, 123, 0.08);
+  color: var(--focus);
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.brain-bank-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.brain-bank-preview {
+  background: rgba(5, 15, 24, 0.84);
+  border: 1px solid rgba(102, 220, 255, 0.14);
+  padding: 10px;
+}
+
+.brain-bank-preview span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.brain-bank-preview canvas {
+  width: 100%;
+  border: 1px solid rgba(102, 220, 255, 0.14);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(50, 152, 215, 0.1), transparent 56%),
+    linear-gradient(180deg, rgba(6, 15, 24, 0.96), rgba(2, 8, 13, 0.99));
+}
+
+.brain-bank-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.brain-bank-meta-item {
+  padding: 8px 10px;
+  border: 1px solid rgba(102, 220, 255, 0.12);
+  background: rgba(7, 15, 24, 0.78);
+}
+
+.brain-bank-meta-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  margin-bottom: 5px;
+}
+
+.brain-bank-meta-item strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.brain-bank-card-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.brain-bank-empty {
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 @media (max-width: 1540px) {
@@ -574,6 +846,19 @@ canvas {
   .status-strip {
     width: 100%;
   }
+
+  .brain-bank-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .brain-bank-header {
+    flex-direction: column;
+  }
+
+  .brain-bank-header-actions {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 860px) {
@@ -591,7 +876,28 @@ canvas {
   }
 
   .legend-grid,
-  .detail-grid {
+  .detail-grid,
+  .brain-bank-meta,
+  .brain-bank-actions,
+  .brain-bank-card-actions,
+  .brain-bank-header-actions,
+  .brain-bank-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .brain-bank-modal {
+    padding: 10px;
+  }
+
+  .brain-bank-shell {
+    width: min(100vw - 12px, 1660px);
+  }
+
+  .brain-bank-dialog {
+    padding: 16px;
+  }
+
+  .brain-bank-monitor-strip {
     grid-template-columns: 1fr;
   }
 }

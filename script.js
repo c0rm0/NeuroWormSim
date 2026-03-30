@@ -15,10 +15,24 @@ const lineageStat = document.getElementById("lineageStat");
 const creatureDetails = document.getElementById("creatureDetails");
 const controlDeck = document.getElementById("controlDeck");
 const resetControlsButton = document.getElementById("resetControlsButton");
+const sampleLongestButton = document.getElementById("sampleLongestButton");
+const openBrainBankButton = document.getElementById("openBrainBankButton");
+const brainBankStatus = document.getElementById("brainBankStatus");
+const brainBankModal = document.getElementById("brainBankModal");
+const brainBankList = document.getElementById("brainBankList");
+const brainBankHabitatCanvas = document.getElementById("brainBankHabitatCanvas");
+const brainBankHabitatCtx = brainBankHabitatCanvas.getContext("2d");
+const brainBankHabitatPopulation = document.getElementById("brainBankHabitatPopulation");
+const brainBankHabitatOldest = document.getElementById("brainBankHabitatOldest");
+const brainBankHabitatStored = document.getElementById("brainBankHabitatStored");
+const importBrainButton = document.getElementById("importBrainButton");
+const closeBrainBankButton = document.getElementById("closeBrainBankButton");
+const brainBankFileInput = document.getElementById("brainBankFileInput");
 
 worldCtx.imageSmoothingEnabled = false;
 telemetryCtx.imageSmoothingEnabled = false;
 networkCtx.imageSmoothingEnabled = false;
+brainBankHabitatCtx.imageSmoothingEnabled = false;
 
 const WIDTH = worldCanvas.width;
 const HEIGHT = worldCanvas.height;
@@ -150,6 +164,18 @@ const SENSOR_INPUT_COUNT = SENSOR_INPUT_LABELS.length;
 const MOVEMENT_OUTPUT_COUNT = MOVEMENT_OUTPUT_LABELS.length;
 const TELEMETRY_HISTORY_LIMIT = 220;
 const TELEMETRY_SAMPLE_INTERVAL = 6;
+const APP_NAME = "NeuroWormSim";
+const BRAIN_BANK_FILE_KIND = "neuro-worm-sim-brain-bank-specimen";
+const LEGACY_BRAIN_BANK_FILE_KINDS = ["retro-neural-lab-brain-bank-specimen"];
+const BRAIN_BANK_FILE_VERSION = 1;
+const BRAIN_BANK_HABITAT_REFRESH_INTERVAL = 2;
+const BRAIN_BANK_DB_NAME = "neuro-worm-sim";
+const LEGACY_BRAIN_BANK_DB_NAMES = ["retro-neural-evolution-lab"];
+const BRAIN_BANK_DB_VERSION = 1;
+const BRAIN_BANK_DB_STORE = "brainBankSettings";
+const BRAIN_BANK_DIR_HANDLE_KEY = "brainBankDirectoryHandle";
+const BRAIN_BANK_FOLDER_NAME = "brain-bank";
+const BRAIN_BANK_PICKER_ID = "neurowormsim-brain-bank-root";
 
 const CONTROL_DEFS = [
   {
@@ -278,6 +304,13 @@ const state = {
   extinctionLogged: false,
   extinctionSpecimen: null,
   extinctionScene: null,
+  brainBank: [],
+  nextBrainBankId: 1,
+  brainBankScene: null,
+  brainBankModalOpen: false,
+  brainBankFocusId: null,
+  brainBankMessage: "No preserved specimens stored yet.",
+  brainBankHabitatDrawTick: -1,
   networkDisplay: null,
   startupScene: null,
   telemetryHistory: [],
@@ -769,6 +802,162 @@ function buildControlDeck() {
   }
 }
 
+function openBrainBankDb(dbName = BRAIN_BANK_DB_NAME) {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(dbName, BRAIN_BANK_DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(BRAIN_BANK_DB_STORE)) {
+        db.createObjectStore(BRAIN_BANK_DB_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function readBrainBankDbValue(key, dbName = BRAIN_BANK_DB_NAME) {
+  if (!window.indexedDB) {
+    return null;
+  }
+
+  const db = await openBrainBankDb(dbName);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BRAIN_BANK_DB_STORE, "readonly");
+    const store = tx.objectStore(BRAIN_BANK_DB_STORE);
+    const request = store.get(key);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result ?? null);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function writeBrainBankDbValue(key, value, dbName = BRAIN_BANK_DB_NAME) {
+  if (!window.indexedDB) {
+    return;
+  }
+
+  const db = await openBrainBankDb(dbName);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BRAIN_BANK_DB_STORE, "readwrite");
+    const store = tx.objectStore(BRAIN_BANK_DB_STORE);
+    const request = store.put(value, key);
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function supportsBrainBankFolderAccess() {
+  return typeof window.showDirectoryPicker === "function" && Boolean(window.indexedDB);
+}
+
+async function ensureDirectoryPermission(handle, writable = false) {
+  if (!handle) {
+    return false;
+  }
+
+  const options = writable ? { mode: "readwrite" } : {};
+  if (typeof handle.queryPermission === "function") {
+    const current = await handle.queryPermission(options);
+    if (current === "granted") {
+      return true;
+    }
+  }
+
+  if (typeof handle.requestPermission === "function") {
+    const requested = await handle.requestPermission(options);
+    return requested === "granted";
+  }
+
+  return false;
+}
+
+async function getPersistedBrainBankRootHandle() {
+  try {
+    const currentHandle = await readBrainBankDbValue(BRAIN_BANK_DIR_HANDLE_KEY);
+    if (currentHandle) {
+      return currentHandle;
+    }
+
+    for (let i = 0; i < LEGACY_BRAIN_BANK_DB_NAMES.length; i += 1) {
+      const legacyHandle = await readBrainBankDbValue(BRAIN_BANK_DIR_HANDLE_KEY, LEGACY_BRAIN_BANK_DB_NAMES[i]);
+      if (legacyHandle) {
+        await persistBrainBankRootHandle(legacyHandle);
+        return legacyHandle;
+      }
+    }
+  } catch (error) {
+    // Ignore read failures and fall through to null below.
+  }
+
+  return null;
+}
+
+async function persistBrainBankRootHandle(handle) {
+  try {
+    await writeBrainBankDbValue(BRAIN_BANK_DIR_HANDLE_KEY, handle);
+  } catch (error) {
+    // Ignore persistence failures and continue with the live handle.
+  }
+}
+
+async function chooseBrainBankRootHandle() {
+  if (!supportsBrainBankFolderAccess()) {
+    throw new Error("Folder access is not available in this browser.");
+  }
+
+  const rootHandle = await window.showDirectoryPicker({
+    id: BRAIN_BANK_PICKER_ID,
+    mode: "readwrite"
+  });
+  const granted = await ensureDirectoryPermission(rootHandle, true);
+  if (!granted) {
+    throw new Error("Folder permission was not granted.");
+  }
+  await persistBrainBankRootHandle(rootHandle);
+  return rootHandle;
+}
+
+async function getBrainBankDirectory(options = {}) {
+  const {
+    create = false,
+    writable = false,
+    promptIfMissing = false
+  } = options;
+
+  if (!supportsBrainBankFolderAccess()) {
+    return null;
+  }
+
+  let rootHandle = await getPersistedBrainBankRootHandle();
+  if (!rootHandle && promptIfMissing) {
+    rootHandle = await chooseBrainBankRootHandle();
+  }
+  if (!rootHandle) {
+    return null;
+  }
+
+  const granted = await ensureDirectoryPermission(rootHandle, writable);
+  if (!granted) {
+    if (!promptIfMissing) {
+      return null;
+    }
+    rootHandle = await chooseBrainBankRootHandle();
+  }
+
+  try {
+    const folderHandle = await rootHandle.getDirectoryHandle(BRAIN_BANK_FOLDER_NAME, { create });
+    return { rootHandle, folderHandle };
+  } catch (error) {
+    return null;
+  }
+}
+
 function updateControlDisplay(key) {
   const control = controlElements[key];
   if (!control) {
@@ -1026,6 +1215,649 @@ function cloneExtinctionSpecimen(creature) {
       : "adult",
     brain: cloneBrain(creature.brain)
   };
+}
+
+function sanitizeFileToken(value) {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "specimen";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatBrainBankTimestamp(isoString) {
+  const date = isoString ? new Date(isoString) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const year = safeDate.getFullYear();
+  const month = String(safeDate.getMonth() + 1).padStart(2, "0");
+  const day = String(safeDate.getDate()).padStart(2, "0");
+  const hours = String(safeDate.getHours()).padStart(2, "0");
+  const minutes = String(safeDate.getMinutes()).padStart(2, "0");
+  const seconds = String(safeDate.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function isBrainBankBusy() {
+  return Boolean(state.startupScene || state.extinctionScene || state.brainBankScene);
+}
+
+function describeBrainBankOrigin(origin) {
+  return origin === "imported" ? "IMPORTED FILE" : "LIVE SAMPLE";
+}
+
+function cloneBrainBankSpecimen(specimen, brainOverride = null) {
+  const brain = brainOverride || specimen?.brain;
+  if (!brain) {
+    throw new Error("Specimen brain data is missing.");
+  }
+
+  return {
+    x: Number.isFinite(specimen?.x) ? specimen.x : WIDTH * 0.5,
+    y: Number.isFinite(specimen?.y) ? specimen.y : HEIGHT * 0.5,
+    heading: Number.isFinite(specimen?.heading) ? specimen.heading : -0.18,
+    hue: normalizeHueValue(specimen?.hue ?? 42),
+    energy: Number.isFinite(specimen?.energy) ? specimen.energy : CONFIG.startingEnergy,
+    age: Math.max(0, Math.round(specimen?.age ?? 0)),
+    generation: Math.max(1, Math.round(specimen?.generation ?? 1)),
+    segmentGene: clampSegmentGene(specimen?.segmentGene ?? randomSegmentGene()),
+    lifeStage: specimen?.lifeStage === "egg" || specimen?.lifeStage === "juvenile"
+      ? specimen.lifeStage
+      : "adult",
+    brain: cloneBrain(brain)
+  };
+}
+
+function isValidBrainShape(brain) {
+  if (!brain || !Array.isArray(brain.weights) || !Array.isArray(brain.biases)) {
+    return false;
+  }
+
+  const layerCounts = getBrainLayerCounts();
+  if (brain.weights.length !== layerCounts.length - 1 || brain.biases.length !== layerCounts.length - 1) {
+    return false;
+  }
+
+  for (let layerIndex = 0; layerIndex < brain.weights.length; layerIndex += 1) {
+    const expectedRows = layerCounts[layerIndex + 1];
+    const expectedCols = layerCounts[layerIndex];
+    const weightLayer = brain.weights[layerIndex];
+    const biasLayer = brain.biases[layerIndex];
+
+    if (!Array.isArray(weightLayer) || !Array.isArray(biasLayer)) {
+      return false;
+    }
+    if (weightLayer.length !== expectedRows || biasLayer.length !== expectedRows) {
+      return false;
+    }
+
+    for (let rowIndex = 0; rowIndex < weightLayer.length; rowIndex += 1) {
+      if (!Array.isArray(weightLayer[rowIndex]) || weightLayer[rowIndex].length !== expectedCols) {
+        return false;
+      }
+      for (let colIndex = 0; colIndex < weightLayer[rowIndex].length; colIndex += 1) {
+        if (!Number.isFinite(weightLayer[rowIndex][colIndex])) {
+          return false;
+        }
+      }
+    }
+
+    for (let nodeIndex = 0; nodeIndex < biasLayer.length; nodeIndex += 1) {
+      if (!Number.isFinite(biasLayer[nodeIndex])) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function buildBrainBankEntryFileName(entry) {
+  const creatureToken = entry.creatureId
+    ? `c-${String(entry.creatureId).padStart(3, "0")}`
+    : sanitizeFileToken(entry.displayName);
+  const generationToken = `g-${String(entry.generation).padStart(2, "0")}`;
+  const ageToken = `age-${String(Math.round(entry.ageFrames)).padStart(5, "0")}f`;
+  const stamp = formatBrainBankTimestamp(entry.sampledAtIso);
+  return `${sanitizeFileToken(`${creatureToken}-${generationToken}-${ageToken}-${stamp}`)}.json`;
+}
+
+function createBrainBankEntry(source, options = {}) {
+  const specimen = cloneBrainBankSpecimen(source.specimen || source, source.brain || source.specimen?.brain);
+  const brain = cloneBrain(specimen.brain);
+  const entry = {
+    id: state.nextBrainBankId++,
+    displayName: options.displayName || source.displayName || (source.creatureId
+      ? `Specimen C-${String(source.creatureId).padStart(3, "0")}`
+      : `Stored Specimen ${String(state.nextBrainBankId - 1).padStart(2, "0")}`),
+    creatureId: source.creatureId ?? null,
+    origin: options.origin || source.origin || "sampled",
+    sampledAtIso: options.sampledAtIso || source.sampledAtIso || new Date().toISOString(),
+    sampledTick: options.sampledTick ?? source.sampledTick ?? state.tick,
+    note: options.note || source.note || "",
+    brain,
+    specimen,
+    hue: specimen.hue,
+    generation: specimen.generation,
+    segmentGene: specimen.segmentGene,
+    ageFrames: specimen.age
+  };
+
+  entry.fileName = options.fileName || source.fileName || buildBrainBankEntryFileName(entry);
+  return entry;
+}
+
+function createBrainBankFilePayload(entry) {
+  return {
+    kind: BRAIN_BANK_FILE_KIND,
+    version: BRAIN_BANK_FILE_VERSION,
+    exportedAt: entry.sampledAtIso,
+    metadata: {
+      displayName: entry.displayName,
+      origin: entry.origin,
+      fileName: entry.fileName,
+      sourceCreatureId: entry.creatureId,
+      sampledTick: entry.sampledTick,
+      ageFrames: entry.ageFrames,
+      generation: entry.generation,
+      hue: entry.hue,
+      segmentGene: entry.segmentGene
+    },
+    specimen: cloneBrainBankSpecimen(entry.specimen, entry.brain),
+    brain: cloneBrain(entry.brain)
+  };
+}
+
+function sortBrainBankEntries() {
+  state.brainBank.sort((a, b) => {
+    const aTime = new Date(a.sampledAtIso).getTime();
+    const bTime = new Date(b.sampledAtIso).getTime();
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
+}
+
+function upsertBrainBankEntry(entry) {
+  const existingIndex = state.brainBank.findIndex((item) => item.fileName === entry.fileName);
+  if (existingIndex >= 0) {
+    entry.id = state.brainBank[existingIndex].id;
+    state.brainBank[existingIndex] = entry;
+    sortBrainBankEntries();
+    return { inserted: false, entry: state.brainBank[existingIndex] };
+  }
+
+  state.brainBank.push(entry);
+  sortBrainBankEntries();
+  return { inserted: true, entry };
+}
+
+function renderSimulationPanels() {
+  updateStats();
+  drawWorld();
+  drawTelemetryPanel();
+  drawNetworkPanel();
+}
+
+async function saveBrainBankEntryToDisk(entry, promptIfMissing = false) {
+  const directory = await getBrainBankDirectory({
+    create: true,
+    writable: true,
+    promptIfMissing
+  });
+
+  if (!directory) {
+    return { saved: false, reason: "unavailable" };
+  }
+
+  const fileHandle = await directory.folderHandle.getFileHandle(entry.fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(JSON.stringify(createBrainBankFilePayload(entry), null, 2));
+  await writable.close();
+  return { saved: true, path: `${BRAIN_BANK_FOLDER_NAME}/${entry.fileName}` };
+}
+
+async function loadBrainBankEntriesFromDisk() {
+  const directory = await getBrainBankDirectory({
+    create: false,
+    writable: false,
+    promptIfMissing: false
+  });
+
+  if (!directory) {
+    return { loaded: 0, skipped: 0, available: false };
+  }
+
+  let loaded = 0;
+  let skipped = 0;
+
+  for await (const [name, handle] of directory.folderHandle.entries()) {
+    if (handle.kind !== "file" || !name.toLowerCase().endsWith(".json")) {
+      continue;
+    }
+
+    try {
+      const file = await handle.getFile();
+      const payload = JSON.parse(await file.text());
+      const entry = createBrainBankEntryFromFilePayload(payload, name);
+      const result = upsertBrainBankEntry(entry);
+      if (result.inserted) {
+        loaded += 1;
+      }
+    } catch (error) {
+      skipped += 1;
+    }
+  }
+
+  return { loaded, skipped, available: true };
+}
+
+function getBrainBankEntryById(entryId) {
+  for (let i = 0; i < state.brainBank.length; i += 1) {
+    if (state.brainBank[i].id === entryId) {
+      return state.brainBank[i];
+    }
+  }
+  return null;
+}
+
+function setBrainBankMessage(message) {
+  state.brainBankMessage = message;
+  updateBrainBankUi();
+}
+
+function updateBrainBankHabitatStrip() {
+  brainBankHabitatPopulation.textContent = `POP ${String(getLivingCreaturesCount()).padStart(2, "0")}`;
+  brainBankHabitatOldest.textContent = `OLDEST ${state.featured ? formatAge(state.featured.age) : "--"}`;
+  brainBankHabitatStored.textContent = `BANK ${String(state.brainBank.length).padStart(2, "0")}`;
+}
+
+function updateBrainBankUi() {
+  const storedCount = state.brainBank.length;
+  const countLabel = storedCount > 0 ? ` (${String(storedCount).padStart(2, "0")})` : "";
+  openBrainBankButton.textContent = `OPEN BRAIN BANK${countLabel}`;
+  sampleLongestButton.disabled = !state.featured || isBrainBankBusy();
+
+  let status = state.brainBankMessage;
+  if (state.brainBankScene) {
+    status = "Sampling the longest-lived brain and writing a fresh specimen file.";
+  } else if (state.extinctionScene) {
+    status = "Brain bank locked while the extinction foundry rebuilds the population.";
+  } else if (state.startupScene) {
+    status = "Brain sampling will unlock when the habitat boot sequence finishes.";
+  } else if (!status || storedCount === 0) {
+    status = storedCount > 0
+      ? `${storedCount} stored specimen${storedCount === 1 ? "" : "s"} ready for export or release.`
+      : "No preserved specimens stored yet.";
+  } else if (storedCount > 0) {
+    status = `${storedCount} stored specimen${storedCount === 1 ? "" : "s"}. ${status}`;
+  }
+  brainBankStatus.textContent = status;
+  updateBrainBankHabitatStrip();
+}
+
+function setBrainBankModalOpen(open, focusId = state.brainBankFocusId) {
+  state.brainBankModalOpen = open;
+  brainBankModal.hidden = !open;
+  if (!open) {
+    return;
+  }
+
+  state.brainBankFocusId = focusId ?? state.brainBankFocusId;
+  state.brainBankHabitatDrawTick = -1;
+  renderBrainBankList();
+  drawBrainBankHabitatView(true);
+}
+
+function renderBrainBankList() {
+  const releaseDisabled = isBrainBankBusy() || getLivingCreaturesCount() >= CONFIG.maxCreatures;
+
+  if (state.brainBank.length === 0) {
+    brainBankList.innerHTML = `
+      <div class="brain-bank-empty">
+        <p>No brain specimens are in the vault yet.</p>
+        <p>Sample the current longest-lived creature to download a JSON brain file and add it to the archive.</p>
+      </div>
+    `;
+    return;
+  }
+
+  brainBankList.innerHTML = state.brainBank.map((entry, index) => `
+    <article class="brain-bank-card" data-entry-id="${entry.id}">
+      <div class="brain-bank-card-head">
+        <div>
+          <h3 class="brain-bank-card-title">${escapeHtml(entry.displayName)}</h3>
+          <p class="brain-bank-card-copy">${escapeHtml(describeBrainBankOrigin(entry.origin))} // ${escapeHtml(entry.fileName)}</p>
+        </div>
+        <span class="brain-bank-chip">${index === 0 ? "LATEST" : `BANK ${String(index + 1).padStart(2, "0")}`}</span>
+      </div>
+      <div class="brain-bank-preview-grid">
+        <div class="brain-bank-preview">
+          <span>Brain Sprite</span>
+          <canvas data-brain-preview="${entry.id}" width="272" height="168" aria-label="Stored brain sprite preview"></canvas>
+        </div>
+        <div class="brain-bank-preview">
+          <span>Body Preview</span>
+          <canvas data-body-preview="${entry.id}" width="232" height="168" aria-label="Stored body preview"></canvas>
+        </div>
+      </div>
+      <div class="brain-bank-meta">
+        <div class="brain-bank-meta-item"><span>Age</span><strong>${formatAge(entry.ageFrames)}</strong></div>
+        <div class="brain-bank-meta-item"><span>Generation</span><strong>${entry.generation}</strong></div>
+        <div class="brain-bank-meta-item"><span>Segments</span><strong>${clampSegmentGene(entry.segmentGene)}</strong></div>
+        <div class="brain-bank-meta-item"><span>Sampled</span><strong>${formatBrainBankTimestamp(entry.sampledAtIso)}</strong></div>
+      </div>
+      <div class="brain-bank-card-actions">
+        <button class="retro-button" type="button" data-action="release" data-entry-id="${entry.id}" ${releaseDisabled ? "disabled" : ""}>RELEASE CLONE</button>
+        <button class="retro-button retro-button-quiet" type="button" data-action="export" data-entry-id="${entry.id}">SAVE FILE</button>
+      </div>
+    </article>
+  `).join("");
+
+  drawBrainBankCanvases();
+}
+
+function drawBrainBankHabitatView(force = false) {
+  if (!state.brainBankModalOpen && !force) {
+    return;
+  }
+
+  const frameTicket = Math.floor(state.tick / BRAIN_BANK_HABITAT_REFRESH_INTERVAL);
+  if (!force && state.brainBankHabitatDrawTick === frameTicket) {
+    return;
+  }
+  state.brainBankHabitatDrawTick = frameTicket;
+
+  const canvas = brainBankHabitatCanvas;
+  const ctx = brainBankHabitatCtx;
+  const inset = 10;
+  const availableWidth = canvas.width - inset * 2;
+  const availableHeight = canvas.height - inset * 2;
+  const scale = Math.min(availableWidth / WIDTH, availableHeight / HEIGHT);
+  const drawWidth = WIDTH * scale;
+  const drawHeight = HEIGHT * scale;
+  const drawX = Math.round((canvas.width - drawWidth) * 0.5);
+  const drawY = Math.round((canvas.height - drawHeight) * 0.5);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#051019";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < canvas.height; y += 12) {
+    ctx.fillStyle = y % 24 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.014)";
+    ctx.fillRect(0, y, canvas.width, 1);
+  }
+
+  ctx.fillStyle = "rgba(4, 10, 17, 0.84)";
+  ctx.fillRect(drawX - 2, drawY - 2, drawWidth + 4, drawHeight + 4);
+  ctx.drawImage(worldCanvas, 0, 0, WIDTH, HEIGHT, drawX, drawY, drawWidth, drawHeight);
+
+  ctx.strokeStyle = "rgba(102, 220, 255, 0.18)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(drawX - 1, drawY - 1, drawWidth + 2, drawHeight + 2);
+
+  ctx.fillStyle = "rgba(4, 10, 17, 0.82)";
+  ctx.fillRect(12, 12, 138, 44);
+  ctx.strokeStyle = "rgba(102, 220, 255, 0.16)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(12.5, 12.5, 137, 43);
+  ctx.fillStyle = "#ddfaff";
+  ctx.font = "10px Courier New";
+  ctx.fillText("CLOSED HABITAT", 22, 28);
+  ctx.fillStyle = "#8bbfca";
+  ctx.fillText(`TICK ${String(state.tick).padStart(5, "0")}`, 22, 44);
+
+  ctx.fillStyle = "rgba(4, 10, 17, 0.82)";
+  ctx.fillRect(canvas.width - 132, canvas.height - 56, 120, 38);
+  ctx.strokeStyle = "rgba(255, 241, 123, 0.18)";
+  ctx.strokeRect(canvas.width - 131.5, canvas.height - 55.5, 119, 37);
+  ctx.fillStyle = "#fff17b";
+  ctx.fillText(`BEST ${formatAge(state.bestEverAge)}`, canvas.width - 122, canvas.height - 34);
+  ctx.fillStyle = "#8bbfca";
+  ctx.fillText(`BANK ${String(state.brainBank.length).padStart(2, "0")}`, canvas.width - 122, canvas.height - 20);
+}
+
+function drawBrainBankCanvases() {
+  if (!state.brainBankModalOpen) {
+    return;
+  }
+
+  const brainCanvases = brainBankList.querySelectorAll("[data-brain-preview]");
+  for (let i = 0; i < brainCanvases.length; i += 1) {
+    const canvas = brainCanvases[i];
+    const entry = getBrainBankEntryById(Number(canvas.dataset.brainPreview));
+    if (!entry) {
+      continue;
+    }
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#051019";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = 0; y < canvas.height; y += 12) {
+      ctx.fillStyle = y % 24 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.014)";
+      ctx.fillRect(0, y, canvas.width, 1);
+    }
+
+    const pulse = 0.5 + Math.sin(entry.id * 0.9) * 0.5;
+    drawBrainBlueprint(ctx, entry.brain, 12, 14, canvas.width - 24, canvas.height - 28, {
+      alpha: 0.24 + pulse * 0.18,
+      fluxAmount: 0.12 + pulse * 0.16,
+      fluxPacketBudget: 5,
+      nodePulseBudget: 3,
+      fluxSpeedScale: 0.18,
+      fluxSelectorSpeed: 0.11,
+      nodePulseSpeed: 0.05,
+      nodePulseSelectorSpeed: 0.12,
+      fluxPhase: entry.id * 0.13,
+      time: state.tick
+    });
+  }
+
+  const bodyCanvases = brainBankList.querySelectorAll("[data-body-preview]");
+  for (let i = 0; i < bodyCanvases.length; i += 1) {
+    const canvas = bodyCanvases[i];
+    const entry = getBrainBankEntryById(Number(canvas.dataset.bodyPreview));
+    if (!entry) {
+      continue;
+    }
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#051019";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(102, 220, 255, 0.06)";
+    ctx.fillRect(18, canvas.height - 34, canvas.width - 36, 8);
+    ctx.fillStyle = "rgba(255, 241, 123, 0.08)";
+    ctx.fillRect(30, canvas.height - 22, canvas.width - 60, 1);
+
+    const pulse = 0.5 + Math.sin(entry.id * 0.8) * 0.5;
+    drawExtinctionSpecimen(
+      ctx,
+      entry.specimen,
+      canvas.width * 0.5,
+      canvas.height * 0.52,
+      1.22,
+      -0.2 + Math.sin(state.tick * 0.03 + entry.id * 0.4) * 0.06,
+      0.98,
+      0.46 + pulse * 0.22,
+      0
+    );
+  }
+}
+
+async function exportBrainBankEntry(entryId) {
+  const entry = getBrainBankEntryById(entryId);
+  if (!entry) {
+    return;
+  }
+
+  try {
+    const result = await saveBrainBankEntryToDisk(entry, true);
+    if (result.saved) {
+      setBrainBankMessage(`Saved ${entry.fileName} into ${result.path}.`);
+      return;
+    }
+  } catch (error) {
+    // Fall through to message below.
+  }
+
+  setBrainBankMessage("Brain file save was cancelled or folder access is unavailable.");
+}
+
+function releaseBrainBankClone(entryId) {
+  const entry = getBrainBankEntryById(entryId);
+  if (!entry) {
+    return;
+  }
+
+  if (isBrainBankBusy()) {
+    setBrainBankMessage("Wait for the active lab animation to finish before releasing a stored clone.");
+    return;
+  }
+
+  if (getLivingCreaturesCount() >= CONFIG.maxCreatures) {
+    setBrainBankMessage("Population cap reached. Lower the count or wait for space before releasing a clone.");
+    return;
+  }
+
+  const clone = createCreature(null, {
+    brainOverride: entry.brain,
+    hueOverride: entry.hue,
+    segmentGeneOverride: entry.segmentGene,
+    generationOverride: entry.generation,
+    positionOverride: randomInteriorPosition(CONFIG.creatureRadius),
+    headingOverride: rand(0, TAU),
+    velocityOverride: { vx: rand(-0.45, 0.45), vy: rand(-0.45, 0.45) },
+    energyOverride: CONFIG.startingEnergy
+  });
+
+  clone.recentAction = "BANK";
+  state.creatures.push(clone);
+  spawnSpark(clone.x, clone.y, "#fff17b", 12);
+  playBirthSound(clone.x);
+  chooseFeaturedCreature();
+  renderBrainBankList();
+  renderSimulationPanels();
+  drawBrainBankHabitatView(true);
+  setBrainBankMessage(`Released a live clone from ${entry.displayName}.`);
+}
+
+function createBrainBankEntryFromFilePayload(payload, fileName) {
+  const acceptedKinds = new Set([BRAIN_BANK_FILE_KIND, ...LEGACY_BRAIN_BANK_FILE_KINDS]);
+  if (payload?.kind && !acceptedKinds.has(payload.kind)) {
+    throw new Error("That file is not a brain-bank specimen export from this lab.");
+  }
+
+  const brain = payload?.brain || payload?.specimen?.brain;
+  if (!isValidBrainShape(brain)) {
+    throw new Error("That file does not contain a compatible brain layout.");
+  }
+
+  const metadata = payload?.metadata || {};
+  const specimenSource = payload?.specimen || {
+    hue: metadata.hue,
+    energy: CONFIG.startingEnergy,
+    age: metadata.ageFrames,
+    generation: metadata.generation,
+    segmentGene: metadata.segmentGene,
+    lifeStage: "adult",
+    heading: -0.18
+  };
+
+  return createBrainBankEntry(
+    {
+      creatureId: metadata.sourceCreatureId ?? null,
+      brain,
+      specimen: specimenSource,
+      sampledAtIso: payload?.exportedAt,
+      sampledTick: metadata.sampledTick,
+      fileName,
+      origin: "imported",
+      note: "Imported from a saved specimen file."
+    },
+    {
+      displayName: metadata.displayName || fileName.replace(/\.json$/i, ""),
+      fileName,
+      origin: "imported"
+    }
+  );
+}
+
+async function importBrainBankFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (files.length === 0) {
+    return;
+  }
+
+  let imported = 0;
+  let failed = 0;
+  let newestEntryId = null;
+
+  for (let i = 0; i < files.length; i += 1) {
+    const file = files[i];
+    try {
+      const payload = JSON.parse(await file.text());
+      const entry = createBrainBankEntryFromFilePayload(payload, file.name);
+      const result = upsertBrainBankEntry(entry);
+      newestEntryId = result.entry.id;
+      if (result.inserted) {
+        imported += 1;
+      }
+    } catch (error) {
+      failed += 1;
+    }
+  }
+
+  if (newestEntryId !== null) {
+    state.brainBankFocusId = newestEntryId;
+  }
+  renderBrainBankList();
+  setBrainBankModalOpen(true, newestEntryId);
+  if (imported > 0 && failed === 0) {
+    setBrainBankMessage(`Imported ${imported} brain specimen file${imported === 1 ? "" : "s"} into the vault.`);
+  } else if (imported > 0) {
+    setBrainBankMessage(`Imported ${imported} brain file${imported === 1 ? "" : "s"} and skipped ${failed} incompatible file${failed === 1 ? "" : "s"}.`);
+  } else {
+    setBrainBankMessage("No compatible brain specimen files were imported.");
+  }
+}
+
+async function restoreBrainBankFromDiskOnStartup() {
+  if (!supportsBrainBankFolderAccess()) {
+    setBrainBankMessage(`This browser cannot link the ${APP_NAME} folder. Brain files will stay session-only here.`);
+    return;
+  }
+
+  const result = await loadBrainBankEntriesFromDisk();
+  renderBrainBankList();
+  updateBrainBankUi();
+
+  if (!result.available) {
+    setBrainBankMessage(`Choose the ${APP_NAME} folder the first time you sample a brain. Files will be saved in ${BRAIN_BANK_FOLDER_NAME}.`);
+    return;
+  }
+
+  if (result.loaded > 0 && result.skipped === 0) {
+    setBrainBankMessage(`Auto-loaded ${result.loaded} stored brain file${result.loaded === 1 ? "" : "s"} from ${BRAIN_BANK_FOLDER_NAME}.`);
+    return;
+  }
+
+  if (result.loaded > 0) {
+    setBrainBankMessage(`Auto-loaded ${result.loaded} brain file${result.loaded === 1 ? "" : "s"} from ${BRAIN_BANK_FOLDER_NAME} and skipped ${result.skipped} incompatible file${result.skipped === 1 ? "" : "s"}.`);
+    return;
+  }
+
+  setBrainBankMessage(`Brain bank folder linked. New specimen files will be saved in ${BRAIN_BANK_FOLDER_NAME}.`);
 }
 
 function createCreature(parent = null, options = {}) {
@@ -1696,6 +2528,118 @@ function buildExtinctionScene() {
   };
 }
 
+function buildBrainBankScene(entry) {
+  return {
+    frame: 0,
+    totalFrames: 226,
+    captureFrames: 42,
+    scanFrames: 72,
+    packageFrames: 44,
+    transferFrames: 34,
+    vaultFrames: 34,
+    lastPhase: "",
+    entryId: entry.id,
+    entryLabel: entry.displayName,
+    fileName: entry.fileName,
+    specimen: cloneBrainBankSpecimen(entry.specimen, entry.brain),
+    brain: cloneBrain(entry.brain),
+    hue: entry.hue,
+    generation: entry.generation
+  };
+}
+
+function getBrainBankScenePhase(scene) {
+  const captureEnd = scene.captureFrames;
+  const scanEnd = captureEnd + scene.scanFrames;
+  const packageEnd = scanEnd + scene.packageFrames;
+  const transferEnd = packageEnd + scene.transferFrames;
+
+  if (scene.frame < captureEnd) {
+    return "capture";
+  }
+  if (scene.frame < scanEnd) {
+    return scene.frame < captureEnd + scene.scanFrames * 0.82 ? "scan" : "scan-locked";
+  }
+  if (scene.frame < packageEnd) {
+    return "package";
+  }
+  if (scene.frame < transferEnd) {
+    return "transfer";
+  }
+  return "release";
+}
+
+function updateBrainBankScene() {
+  if (!state.brainBankScene) {
+    return;
+  }
+
+  const scene = state.brainBankScene;
+  scene.frame += 1;
+  const phase = getBrainBankScenePhase(scene);
+  if (phase !== scene.lastPhase) {
+    playExtinctionPhaseTone(phase);
+    scene.lastPhase = phase;
+  }
+
+  if (scene.frame < scene.totalFrames) {
+    return;
+  }
+
+  const entry = getBrainBankEntryById(scene.entryId);
+  state.brainBankScene = null;
+  setBrainBankMessage(entry
+    ? `${entry.displayName} sampled successfully. File ${entry.fileName} is stored in ${BRAIN_BANK_FOLDER_NAME} and the vault is ready.`
+    : "Brain sampling complete. The vault is ready.");
+  setBrainBankModalOpen(true, scene.entryId);
+}
+
+async function sampleFeaturedCreatureToBank() {
+  if (!state.featured) {
+    setBrainBankMessage("No living creature is available to sample right now.");
+    return;
+  }
+
+  if (isBrainBankBusy()) {
+    setBrainBankMessage("Wait for the active lab sequence to finish before sampling another brain.");
+    return;
+  }
+
+  const featured = state.featured;
+  const specimen = cloneExtinctionSpecimen(featured);
+  const entry = createBrainBankEntry(
+    {
+      creatureId: featured.id,
+      specimen,
+      brain: featured.brain,
+      sampledTick: state.tick,
+      origin: "sampled",
+      note: "Sampled from the current longest-lived creature."
+    },
+    {
+      displayName: `Longest-Lived C-${String(featured.id).padStart(3, "0")}`
+    }
+  );
+
+  try {
+    const saveResult = await saveBrainBankEntryToDisk(entry, true);
+    if (!saveResult.saved) {
+      setBrainBankMessage(`Pick the ${APP_NAME} folder to enable brain-bank file storage.`);
+      return;
+    }
+  } catch (error) {
+    setBrainBankMessage("Brain storage was cancelled before the specimen file could be written.");
+    return;
+  }
+
+  const result = upsertBrainBankEntry(entry);
+  state.brainBankFocusId = result.entry.id;
+  renderBrainBankList();
+  setBrainBankModalOpen(false);
+  state.brainBankScene = buildBrainBankScene(result.entry);
+  setBrainBankMessage(`${entry.displayName} captured. Writing ${entry.fileName}.`);
+}
+
 function seedWorld() {
   state.creatures.length = 0;
   state.foods.length = 0;
@@ -2276,6 +3220,12 @@ function reseedIfNeeded() {
 
 function updateSimulation() {
   state.tick += 1;
+  if (state.brainBankScene) {
+    updateBrainBankScene();
+    chooseFeaturedCreature();
+    pushTelemetrySample();
+    return;
+  }
   if (state.extinctionScene) {
     reseedIfNeeded();
     chooseFeaturedCreature();
@@ -4618,6 +5568,286 @@ function drawStartupScene() {
   worldCtx.restore();
 }
 
+function drawBrainBankScene() {
+  const scene = state.brainBankScene;
+  if (!scene) {
+    return;
+  }
+
+  const captureEnd = scene.captureFrames;
+  const scanEnd = captureEnd + scene.scanFrames;
+  const packageEnd = scanEnd + scene.packageFrames;
+  const transferEnd = packageEnd + scene.transferFrames;
+  const progress = clamp(scene.frame / scene.totalFrames, 0, 1);
+  const sceneProgress = smooth01(progress);
+  const captureProgress = smooth01(clamp(scene.frame / Math.max(1, scene.captureFrames), 0, 1));
+  const scanProgress = smooth01(clamp((scene.frame - captureEnd) / Math.max(1, scene.scanFrames), 0, 1));
+  const packageProgress = smooth01(clamp((scene.frame - scanEnd) / Math.max(1, scene.packageFrames), 0, 1));
+  const transferProgress = smooth01(clamp((scene.frame - packageEnd) / Math.max(1, scene.transferFrames), 0, 1));
+  const vaultProgress = smooth01(clamp((scene.frame - transferEnd) / Math.max(1, scene.vaultFrames), 0, 1));
+  const pulse = 0.5 + Math.sin(scene.frame * 0.085) * 0.5;
+  const sweepX = WIDTH * 0.12 + (WIDTH * 0.76) * (0.5 + Math.sin(scene.frame * 0.014) * 0.5);
+  const overlayX = WIDTH * 0.06;
+  const overlayY = HEIGHT * 0.08;
+  const overlayW = WIDTH * 0.88;
+  const overlayH = HEIGHT * 0.8;
+  const leftX = overlayX + 22;
+  const leftY = overlayY + 86;
+  const leftW = Math.max(264, overlayW * 0.27);
+  const leftH = overlayH - 122;
+  const middleX = leftX + leftW + 18;
+  const middleY = leftY;
+  const middleW = Math.max(332, overlayW * 0.34);
+  const middleH = leftH;
+  const rightX = middleX + middleW + 18;
+  const rightY = leftY;
+  const rightW = overlayX + overlayW - rightX - 22;
+  const rightH = leftH;
+  const specimenCellW = Math.min(122, leftW - 54);
+  const specimenCellH = 84;
+  const specimenCellX = leftX + leftW * 0.5 - specimenCellW * 0.5;
+  const specimenCellY = leftY + leftH - specimenCellH - 42;
+  const specimenX = specimenCellX + specimenCellW * 0.5;
+  const specimenY = specimenCellY + specimenCellH * 0.56;
+  const specimenCurl = 0.38 + captureProgress * 0.42 + pulse * 0.16;
+  const brainX = middleX + 18;
+  const brainY = middleY + 24;
+  const brainW = middleW - 36;
+  const brainH = middleH - 48;
+  const vaultSlotX = rightX + 26;
+  const vaultSlotY = rightY + 74;
+  const vaultSlotW = rightW - 52;
+  const vaultSlotH = 124;
+  const cubeOriginX = middleX + middleW * 0.5;
+  const cubeOriginY = middleY + middleH * 0.52;
+  const cubeTargetX = vaultSlotX + vaultSlotW * 0.5;
+  const cubeTargetY = vaultSlotY + vaultSlotH * 0.38;
+  const cubeVisible = packageProgress > 0.03 || transferProgress > 0.01 || vaultProgress > 0.01;
+  const cubeTravel = clamp(transferProgress, 0, 1);
+  const cubeX = lerp(cubeOriginX, cubeTargetX, cubeTravel);
+  const cubeY = lerp(cubeOriginY, cubeTargetY, cubeTravel);
+
+  let phaseLabel = "LOCKING LONGEST-LIVED SPECIMEN";
+  let detailLabel = "CONTAINMENT FIELD STABILIZING";
+  if (scene.frame >= captureEnd && scene.frame < scanEnd) {
+    phaseLabel = "SCANNING LONGEVITY BRAIN";
+    detailLabel = scanProgress < 0.82 ? "HEAD ZOOM // NEURAL SIGNAL EXTRACTION" : "SCAN LOCKED // BRAIN BLUEPRINT RESOLVED";
+  } else if (scene.frame >= scanEnd && scene.frame < packageEnd) {
+    phaseLabel = "PACKAGING ARCHIVE CUBE";
+    detailLabel = "NEURAL MAP COMPRESSED INTO RETRO STORAGE MEDIA";
+  } else if (scene.frame >= packageEnd && scene.frame < transferEnd) {
+    phaseLabel = "TRANSFERRING TO VAULT";
+    detailLabel = "DATA CUBE RIDING THE BRAIN BANK TRANSFER RAIL";
+  } else if (scene.frame >= transferEnd) {
+    phaseLabel = "BRAIN BANK WRITE COMPLETE";
+    detailLabel = "VAULT SLOT SEALED // CLONE FILE READY TO REDEPLOY";
+  }
+
+  worldCtx.save();
+  const overlayGradient = worldCtx.createLinearGradient(overlayX, overlayY, overlayX, overlayY + overlayH);
+  overlayGradient.addColorStop(0, "rgba(2, 10, 19, 0.93)");
+  overlayGradient.addColorStop(0.42, "rgba(3, 12, 23, 0.88)");
+  overlayGradient.addColorStop(1, "rgba(1, 6, 12, 0.94)");
+  worldCtx.fillStyle = overlayGradient;
+  worldCtx.fillRect(overlayX, overlayY, overlayW, overlayH);
+
+  worldCtx.globalCompositeOperation = "lighter";
+  const sweepGradient = worldCtx.createLinearGradient(sweepX - 34, overlayY, sweepX + 34, overlayY);
+  sweepGradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+  sweepGradient.addColorStop(0.48, `rgba(102, 220, 255, ${0.03 + pulse * 0.04})`);
+  sweepGradient.addColorStop(0.5, `rgba(255, 241, 123, ${0.05 + pulse * 0.06})`);
+  sweepGradient.addColorStop(0.52, `rgba(102, 220, 255, ${0.03 + pulse * 0.04})`);
+  sweepGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+  worldCtx.fillStyle = sweepGradient;
+  worldCtx.fillRect(sweepX - 34, overlayY + 8, 68, overlayH - 16);
+  worldCtx.globalCompositeOperation = "source-over";
+
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.28)";
+  worldCtx.lineWidth = 2;
+  worldCtx.strokeRect(overlayX, overlayY, overlayW, overlayH);
+  worldCtx.fillStyle = `rgba(74, 255, 212, ${0.1 + sceneProgress * 0.1})`;
+  worldCtx.fillRect(overlayX + 22, overlayY + 74, (overlayW - 44) * sceneProgress, 3);
+
+  for (let y = overlayY + 8; y < overlayY + overlayH; y += 14) {
+    worldCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.03)" : "rgba(102, 220, 255, 0.014)";
+    worldCtx.fillRect(overlayX + 4, y, overlayW - 8, 1);
+  }
+
+  worldCtx.fillStyle = "#ddfaff";
+  worldCtx.font = "16px Courier New";
+  worldCtx.fillText("LONGEVITY BRAIN BANK", overlayX + 22, overlayY + 28);
+  worldCtx.font = "12px Courier New";
+  worldCtx.fillStyle = `rgba(139, 191, 202, ${0.8 + pulse * 0.16})`;
+  worldCtx.fillText(phaseLabel, overlayX + 22, overlayY + 48);
+  worldCtx.fillText(detailLabel, overlayX + 22, overlayY + 64);
+  worldCtx.fillText(`FILE ${scene.fileName}`, overlayX + 22, overlayY + 82);
+
+  const panelBoxes = [
+    { x: leftX, y: leftY, w: leftW, h: leftH, title: "SPECIMEN LOCK" },
+    { x: middleX, y: middleY, w: middleW, h: middleH, title: `BRAIN BLUEPRINT G${scene.generation}` },
+    { x: rightX, y: rightY, w: rightW, h: rightH, title: "BRAIN BANK VAULT" }
+  ];
+
+  for (let i = 0; i < panelBoxes.length; i += 1) {
+    const panel = panelBoxes[i];
+    worldCtx.fillStyle = "rgba(6, 16, 26, 0.84)";
+    worldCtx.fillRect(panel.x, panel.y, panel.w, panel.h);
+    worldCtx.strokeStyle = "rgba(102, 220, 255, 0.18)";
+    worldCtx.lineWidth = 1;
+    worldCtx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+    worldCtx.fillStyle = "rgba(255, 241, 123, 0.72)";
+    worldCtx.font = "10px Courier New";
+    worldCtx.fillText(panel.title, panel.x + 10, panel.y + 16);
+  }
+
+  drawContainmentCell(
+    worldCtx,
+    specimenCellX,
+    specimenCellY,
+    specimenCellW,
+    specimenCellH,
+    captureProgress,
+    pulse
+  );
+
+  drawExtinctionSpecimen(
+    worldCtx,
+    scene.specimen,
+    specimenX,
+    specimenY,
+    0.9 + captureProgress * 0.18,
+    scene.specimen.heading,
+    0.96,
+    specimenCurl,
+    captureProgress * 0.18
+  );
+
+  drawSpecimenHeadScanPanel(
+    worldCtx,
+    scene.specimen,
+    scene.brain,
+    leftX + 10,
+    leftY + 16,
+    leftW - 20,
+    leftH - 128,
+    scanProgress,
+    scene.frame,
+    specimenX + Math.cos(scene.specimen.heading) * 7,
+    specimenY + Math.sin(scene.specimen.heading) * 7
+  );
+
+  worldCtx.fillStyle = `rgba(221, 250, 255, ${0.66 + captureProgress * 0.2})`;
+  worldCtx.font = "10px Courier New";
+  worldCtx.fillText(`AGE ${formatAge(scene.specimen.age)}`, leftX + 12, leftY + leftH - 20);
+  worldCtx.fillText(`SEGMENTS ${clampSegmentGene(scene.specimen.segmentGene)}`, leftX + leftW - 112, leftY + leftH - 20);
+
+  drawBrainBlueprint(worldCtx, scene.brain, brainX, brainY, brainW, brainH, {
+    alpha: 0.18 + scanProgress * 0.42 + packageProgress * 0.12,
+    fluxAmount: 0.1 + scanProgress * 0.16 + packageProgress * 0.12 + pulse * 0.04,
+    fluxPacketBudget: 8,
+    nodePulseBudget: 5,
+    fluxSpeedScale: 0.2,
+    fluxSelectorSpeed: 0.12,
+    nodePulseSpeed: 0.06,
+    nodePulseSelectorSpeed: 0.14,
+    fluxPhase: 0.21,
+    time: scene.frame
+  });
+
+  if (packageProgress < 0.98) {
+    worldCtx.fillStyle = `rgba(4, 12, 20, ${0.52 - scanProgress * 0.22})`;
+    worldCtx.fillRect(brainX, brainY, brainW, brainH);
+  }
+
+  worldCtx.fillStyle = `rgba(102, 220, 255, ${0.08 + packageProgress * 0.18})`;
+  worldCtx.fillRect(middleX + 12, middleY + middleH - 36, middleW - 24, 8);
+  worldCtx.fillStyle = `rgba(255, 241, 123, ${0.18 + packageProgress * 0.32})`;
+  worldCtx.fillRect(middleX + 12, middleY + middleH - 36, (middleW - 24) * Math.max(scanProgress, packageProgress), 8);
+  worldCtx.fillStyle = `rgba(221, 250, 255, ${0.68 + packageProgress * 0.18})`;
+  worldCtx.font = "9px Courier New";
+  worldCtx.fillText("VAULT COMPRESSION", middleX + 12, middleY + middleH - 44);
+
+  for (let slot = 0; slot < 3; slot += 1) {
+    const slotY = vaultSlotY + slot * 92;
+    worldCtx.fillStyle = "rgba(5, 15, 24, 0.88)";
+    worldCtx.fillRect(vaultSlotX, slotY, vaultSlotW, 68);
+    worldCtx.strokeStyle = slot === 0
+      ? `rgba(255, 241, 123, ${0.18 + vaultProgress * 0.3})`
+      : "rgba(102, 220, 255, 0.12)";
+    worldCtx.strokeRect(vaultSlotX, slotY, vaultSlotW, 68);
+    worldCtx.fillStyle = slot === 0
+      ? `rgba(255, 241, 123, ${0.64 + vaultProgress * 0.22})`
+      : "rgba(139, 191, 202, 0.54)";
+    worldCtx.fillText(slot === 0 ? "ACTIVE SLOT // LONGEVITY LEADER" : `EMPTY SLOT ${slot + 1}`, vaultSlotX + 10, slotY + 14);
+  }
+
+  if (cubeVisible) {
+    drawBrainDataCube(
+      worldCtx,
+      cubeX,
+      cubeY,
+      "255, 241, 123",
+      0.46 + packageProgress * 0.34 + vaultProgress * 0.18,
+      1.24,
+      pulse
+    );
+  }
+
+  if (transferProgress > 0.01) {
+    worldCtx.save();
+    worldCtx.globalCompositeOperation = "lighter";
+    worldCtx.strokeStyle = `rgba(255, 241, 123, ${0.12 + transferProgress * 0.2})`;
+    worldCtx.lineWidth = 1.2;
+    worldCtx.setLineDash([5, 4]);
+    worldCtx.beginPath();
+    worldCtx.moveTo(cubeOriginX, cubeOriginY);
+    worldCtx.lineTo(cubeTargetX, cubeTargetY);
+    worldCtx.stroke();
+    worldCtx.setLineDash([]);
+    worldCtx.restore();
+  }
+
+  if (vaultProgress > 0.01) {
+    const storedBrainX = vaultSlotX + 10;
+    const storedBrainY = vaultSlotY + 22;
+    const storedBrainW = vaultSlotW * 0.58;
+    const storedBrainH = 36;
+    drawBrainBlueprint(worldCtx, scene.brain, storedBrainX, storedBrainY, storedBrainW, storedBrainH, {
+      alpha: 0.12 + vaultProgress * 0.36,
+      fluxAmount: 0.08 + vaultProgress * 0.18,
+      fluxPacketBudget: 3,
+      nodePulseBudget: 2,
+      fluxSpeedScale: 0.14,
+      fluxSelectorSpeed: 0.1,
+      nodePulseSpeed: 0.05,
+      nodePulseSelectorSpeed: 0.12,
+      fluxPhase: 0.07,
+      time: scene.frame
+    });
+    drawExtinctionSpecimen(
+      worldCtx,
+      scene.specimen,
+      vaultSlotX + vaultSlotW * 0.82,
+      vaultSlotY + 40,
+      0.44,
+      -0.16,
+      0.98,
+      0.18 + pulse * 0.08,
+      0
+    );
+    worldCtx.fillStyle = `rgba(74, 255, 212, ${0.18 + vaultProgress * 0.24})`;
+    worldCtx.fillRect(vaultSlotX + 10, vaultSlotY + 58, vaultSlotW - 20, 3);
+    worldCtx.fillStyle = `rgba(255, 241, 123, ${0.28 + vaultProgress * 0.34})`;
+    worldCtx.fillRect(vaultSlotX + 10, vaultSlotY + 58, (vaultSlotW - 20) * vaultProgress, 3);
+  }
+
+  worldCtx.fillStyle = `rgba(221, 250, 255, ${0.64 + vaultProgress * 0.2})`;
+  worldCtx.font = "10px Courier New";
+  worldCtx.fillText(`WRITE ${Math.round((0.08 + packageProgress * 0.26 + transferProgress * 0.3 + vaultProgress * 0.36) * 100)}%`, rightX + 12, rightY + rightH - 26);
+  worldCtx.fillText(`CLONE FILE READY ${vaultProgress > 0.96 ? "YES" : "SYNC"}`, rightX + rightW - 150, rightY + rightH - 26);
+  worldCtx.restore();
+}
+
 function drawWorld() {
   drawBackground();
   drawFood();
@@ -4625,6 +5855,7 @@ function drawWorld() {
   drawCreatures();
   drawSparks();
   drawWorldHud();
+  drawBrainBankScene();
   drawStartupScene();
 }
 
@@ -5146,6 +6377,7 @@ function updateStats() {
   extinctionStat.textContent = String(state.extinctionCount).padStart(2, "0");
   runtimeStat.textContent = formatRunTimer(state.tick);
   lineageStat.textContent = formatRunTimer(state.lineageTick);
+  updateBrainBankUi();
 }
 
 let lastTime = 0;
@@ -5159,6 +6391,15 @@ function frame(timestamp) {
 
   const delta = Math.min(40, timestamp - lastTime);
   lastTime = timestamp;
+
+  if (state.brainBankModalOpen) {
+    accumulator = 0;
+    updateStats();
+    drawBrainBankHabitatView();
+    requestAnimationFrame(frame);
+    return;
+  }
+
   accumulator += delta;
 
   while (accumulator >= step) {
@@ -5171,22 +6412,61 @@ function frame(timestamp) {
     accumulator -= step;
   }
 
-  updateStats();
-  drawWorld();
-  drawTelemetryPanel();
-  drawNetworkPanel();
+  renderSimulationPanels();
+  drawBrainBankHabitatView();
   requestAnimationFrame(frame);
 }
 
 buildControlDeck();
 resetControlsButton.addEventListener("click", resetControlDeck);
+sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
+openBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(true));
+importBrainButton.addEventListener("click", () => brainBankFileInput.click());
+closeBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(false));
+brainBankModal.addEventListener("click", (event) => {
+  if (event.target === brainBankModal) {
+    setBrainBankModalOpen(false);
+  }
+});
+brainBankList.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    return;
+  }
+
+  const entryId = Number(button.dataset.entryId);
+  if (button.dataset.action === "release") {
+    releaseBrainBankClone(entryId);
+    return;
+  }
+  if (button.dataset.action === "export") {
+    exportBrainBankEntry(entryId);
+  }
+});
+brainBankFileInput.addEventListener("change", async () => {
+  try {
+    await importBrainBankFiles(brainBankFileInput.files);
+  } catch (error) {
+    setBrainBankMessage("The selected file could not be imported.");
+  } finally {
+    brainBankFileInput.value = "";
+  }
+});
 window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
 window.addEventListener("keydown", unlockAudioContext);
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.brainBankModalOpen) {
+    setBrainBankModalOpen(false);
+  }
+});
+renderBrainBankList();
+updateBrainBankUi();
 seedWorld();
 state.startupScene = createStartupScene();
 chooseFeaturedCreature();
 updateStats();
-drawWorld();
-drawTelemetryPanel();
-drawNetworkPanel();
+renderSimulationPanels();
 requestAnimationFrame(frame);
+restoreBrainBankFromDiskOnStartup().catch(() => {
+  setBrainBankMessage("Brain bank startup import failed. You can still sample and save new brains manually.");
+});
