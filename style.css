@@ -884,28 +884,32 @@ canvas {
 @media (max-width: 860px) {
   .app-shell {
     width: min(100vw - 8px, 1840px);
-    padding: 4px 0 8px;
+    padding: 2px 0 6px;
   }
 
   .hud-bar {
     flex-direction: column;
-    gap: 8px;
-    padding: 8px 10px;
+    gap: 5px;
+    padding: 5px 6px;
   }
 
   .branding {
+    display: grid;
+    gap: 0;
     max-width: none;
+  }
+
+  .branding h1 {
+    font-size: clamp(1.02rem, 4.2vw, 1.22rem);
+    line-height: 1.02;
   }
 
   .eyebrow {
-    margin-bottom: 4px;
-    letter-spacing: 0.08em;
+    display: none;
   }
 
   .tagline {
-    margin-top: 6px;
-    max-width: none;
-    line-height: 1.28;
+    display: none;
   }
 
   .sim-layout {
@@ -918,19 +922,22 @@ canvas {
 
   .status-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
+    gap: 4px;
   }
 
   .status-card {
-    min-height: 64px;
-    padding: 8px 9px;
+    min-height: 54px;
+    padding: 6px 7px;
   }
 
   .status-label {
+    font-size: 0.76rem;
     line-height: 1.15;
+    letter-spacing: 0.04em;
   }
 
   .status-card strong {
+    font-size: clamp(0.98rem, 4.1vw, 1.16rem);
     line-height: 1;
   }
 
@@ -983,46 +990,34 @@ canvas {
 
 @media (max-width: 640px) {
   .hud-bar {
-    gap: 6px;
-    padding: 7px 8px;
+    gap: 4px;
+    padding: 4px 5px;
   }
 
   .branding {
-    display: grid;
-    gap: 4px;
+    gap: 0;
   }
 
   .branding h1 {
-    font-size: clamp(1.1rem, 4.8vw, 1.38rem);
-  }
-
-  .eyebrow {
-    margin-bottom: 0;
-    font-size: 0.78rem;
-  }
-
-  .tagline {
-    margin-top: 0;
-    font-size: 0.9rem;
-    line-height: 1.22;
+    font-size: clamp(0.96rem, 4.7vw, 1.12rem);
   }
 
   .status-strip {
-    gap: 5px;
+    gap: 4px;
   }
 
   .status-card {
-    min-height: 58px;
-    padding: 7px 8px;
+    min-height: 50px;
+    padding: 5px 6px;
   }
 
   .status-label {
-    font-size: 0.78rem;
-    letter-spacing: 0.05em;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
   }
 
   .status-card strong {
-    font-size: clamp(1.02rem, 4.6vw, 1.24rem);
+    font-size: clamp(0.92rem, 4.4vw, 1.08rem);
   }
 
   .panel-heading {
