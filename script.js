@@ -5699,27 +5699,6 @@ function drawSparks() {
   }
 }
 
-function drawWorldHud() {
-  const textLines = [
-    `TICK ${state.tick.toString().padStart(5, "0")}`,
-    `BEST EVER ${formatAge(state.bestEverAge)}`,
-    state.featured
-      ? `FOCUS C-${String(state.featured.id).padStart(3, "0")} ${state.featured.recentAction}`
-      : "FOCUS NONE"
-  ];
-
-  worldCtx.fillStyle = "rgba(2, 8, 13, 0.72)";
-  worldCtx.fillRect(16, 16, 224, 62);
-  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.18)";
-  worldCtx.strokeRect(16.5, 16.5, 223, 61);
-
-  worldCtx.font = CANVAS_FONTS.section;
-  worldCtx.fillStyle = "#ddfaff";
-  for (let i = 0; i < textLines.length; i += 1) {
-    worldCtx.fillText(textLines[i], 28, 36 + i * 18);
-  }
-}
-
 function drawStartupScene() {
   const scene = state.startupScene;
   if (!scene) {
@@ -6160,7 +6139,6 @@ function drawWorld() {
   drawExtinctionScene();
   drawCreatures();
   drawSparks();
-  drawWorldHud();
   drawBrainBankScene();
   drawStartupScene();
 }

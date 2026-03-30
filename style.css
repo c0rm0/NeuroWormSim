@@ -289,26 +289,6 @@ body::after {
   color: var(--negative);
 }
 
-.canvas-overlay {
-  position: absolute;
-  left: 22px;
-  right: 22px;
-  bottom: 18px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  z-index: 2;
-}
-
-.canvas-overlay span {
-  background: rgba(4, 10, 17, 0.76);
-  border: 1px solid rgba(102, 220, 255, 0.18);
-  padding: 6px 10px;
-  color: var(--muted);
-  font-size: var(--ui-copy-size);
-  letter-spacing: 0.08em;
-}
-
 canvas {
   display: block;
   width: 100%;
@@ -903,16 +883,46 @@ canvas {
 
 @media (max-width: 860px) {
   .app-shell {
-    width: min(100vw - 10px, 1840px);
-    padding-top: 8px;
+    width: min(100vw - 8px, 1840px);
+    padding: 6px 0 10px;
   }
 
   .hud-bar {
     flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .branding {
+    max-width: none;
+  }
+
+  .eyebrow {
+    margin-bottom: 6px;
+    letter-spacing: 0.08em;
+  }
+
+  .tagline {
+    margin-top: 8px;
+    max-width: none;
+  }
+
+  .sim-layout {
+    gap: 10px;
+    grid-template-areas:
+      "world"
+      "side"
+      "telemetry";
   }
 
   .status-strip {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .status-card {
+    min-height: 76px;
+    padding: 10px;
   }
 
   .legend-grid,
@@ -923,6 +933,26 @@ canvas {
   .brain-bank-header-actions,
   .brain-bank-preview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .telemetry-panel,
+  .world-panel,
+  .network-panel,
+  .legend-panel,
+  .controls-panel {
+    padding: 12px;
+  }
+
+  .world-panel {
+    padding: 8px;
+  }
+
+  .canvas-frame {
+    padding: 8px;
+  }
+
+  .world-panel .canvas-frame {
+    padding: 4px;
   }
 
   .brain-bank-modal {
@@ -939,5 +969,41 @@ canvas {
 
   .brain-bank-monitor-strip {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .hud-bar {
+    padding: 10px;
+  }
+
+  .branding h1 {
+    font-size: clamp(1.18rem, 5vw, 1.5rem);
+  }
+
+  .panel-heading {
+    margin-bottom: 8px;
+  }
+
+  .panel-heading p,
+  .microcopy p,
+  .control-meta,
+  .signal-line,
+  .detail-box strong,
+  .detail-box span {
+    line-height: 1.3;
+  }
+
+  .signal-line {
+    grid-template-columns: 76px minmax(0, 1fr) 52px;
+    gap: 6px;
+  }
+
+  .memory-signal-line {
+    grid-template-columns: 76px minmax(0, 1fr) 110px;
+  }
+
+  .memory-values {
+    min-width: 110px;
   }
 }
