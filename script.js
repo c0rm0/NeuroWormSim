@@ -209,11 +209,13 @@ const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_N
 const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
 const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
+const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS = 5000;
 const FAMILY_TREE_MANUAL_SCROLL_INTENT_MS = 850;
 const FAMILY_TREE_SCROLL_SUPPRESS_MS = 140;
 const FAMILY_TREE_EXPORT_MAX_DIMENSION = 8192;
 const FAMILY_TREE_EXPORT_MAX_AREA = 16777216;
+const EXTINCTION_FORGE_SPEED_MULTIPLIER = 1.5;
 const APP_NAME = "NeuroWormSim";
 const BRAIN_BANK_FILE_KIND = "neuro-worm-sim-brain-bank-specimen";
 const LEGACY_BRAIN_BANK_FILE_KINDS = ["retro-neural-lab-brain-bank-specimen"];
@@ -452,6 +454,10 @@ function getNowMs() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
+}
+
+function speedUpExtinctionForgeFrames(frames) {
+  return Math.max(1, Math.round(frames / EXTINCTION_FORGE_SPEED_MULTIPLIER));
 }
 
 function lerp(a, b, t) {
@@ -1791,11 +1797,16 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
 
   let targetScrollTop = null;
   if (targetNode) {
-    if (latestGenerationHasLiving && deepestLivingNode && targetNode.id === deepestLivingNode.id) {
-      targetScrollTop = scrollLimit;
-    } else {
-      const position = positions.get(targetNode.id);
-      if (position) {
+    const position = positions.get(targetNode.id);
+    if (position) {
+      if (latestGenerationHasLiving && deepestLivingNode && targetNode.id === deepestLivingNode.id) {
+        const revealThreshold = familyTreeScroll.clientHeight - FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN;
+        targetScrollTop = clamp(
+          position.y - revealThreshold,
+          0,
+          scrollLimit
+        );
+      } else {
         targetScrollTop = clamp(
           position.y - familyTreeScroll.clientHeight * FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR,
           0,
@@ -4034,10 +4045,10 @@ function buildExtinctionScene() {
   const seeds = Math.min(desiredSeeds, CONFIG.maxCreatures);
   const hasSourceBrain = Boolean(state.extinctionCandidateBrain);
   const inheritedSeeds = hasSourceBrain ? Math.min(4, seeds) : 0;
-  const scanLeadFrames = hasSourceBrain ? 196 : 72;
-  const inheritedPlanFrames = hasSourceBrain ? 370 : 0;
-  const randomPlanFrames = hasSourceBrain ? 48 : 72;
-  const outroFrames = 96;
+  const scanLeadFrames = speedUpExtinctionForgeFrames(hasSourceBrain ? 196 : 72);
+  const inheritedPlanFrames = hasSourceBrain ? speedUpExtinctionForgeFrames(370) : 0;
+  const randomPlanFrames = speedUpExtinctionForgeFrames(hasSourceBrain ? 48 : 72);
+  const outroFrames = speedUpExtinctionForgeFrames(96);
   const positions = buildIncubationPositions(seeds);
   const plans = [];
 
@@ -5722,24 +5733,24 @@ function getExtinctionPlanProgress(scene, slotTiming, plan) {
   const normalizedProgress = clamp(relativeFrame / Math.max(1, durationFrames), 0, 1);
   const phaseFrames = plan.inherited
     ? {
-      build: 8,
+      build: speedUpExtinctionForgeFrames(8),
       buildPause: 0,
-      mutate: 200,
+      mutate: speedUpExtinctionForgeFrames(200),
       mutatePause: 0,
       preview: 0,
-      pack: 120,
-      travel: 24,
-      implant: 18
+      pack: speedUpExtinctionForgeFrames(120),
+      travel: speedUpExtinctionForgeFrames(24),
+      implant: speedUpExtinctionForgeFrames(18)
     }
     : {
-      build: 10,
+      build: speedUpExtinctionForgeFrames(10),
       buildPause: 0,
-      mutate: 8,
+      mutate: speedUpExtinctionForgeFrames(8),
       mutatePause: 0,
       preview: 0,
-      pack: 6,
-      travel: 10,
-      implant: 8
+      pack: speedUpExtinctionForgeFrames(6),
+      travel: speedUpExtinctionForgeFrames(10),
+      implant: speedUpExtinctionForgeFrames(8)
     };
 
   const buildEndFrame = phaseFrames.build;
@@ -8744,6 +8755,7 @@ function drawFamilyTreePanel() {
       continue;
     }
 
+    const parentNode = state.lineageNodes.get(node.parentId);
     const parentPos = positions.get(node.parentId);
     const childPos = positions.get(node.id);
     if (!parentPos || !childPos) {
@@ -8757,16 +8769,25 @@ function drawFamilyTreePanel() {
     }
 
     const highlighted = trail.has(node.id) && trail.has(node.parentId);
+    const livingLink = Boolean(node.alive && parentNode?.alive);
     const controlY = (parentPos.y + childPos.y) * 0.5;
     const drawActive = lineProgress < 0.999;
     familyTreeCtx.strokeStyle = highlighted
       ? `rgba(255, 241, 123, ${drawActive ? 0.96 : 0.84})`
-      : `rgba(102, 220, 255, ${drawActive ? 0.44 : 0.18})`;
-    familyTreeCtx.lineWidth = highlighted ? 2.4 : drawActive ? 1.8 : 1;
-    familyTreeCtx.shadowBlur = drawActive ? 8 : 0;
-    familyTreeCtx.shadowColor = highlighted
-      ? "rgba(255, 241, 123, 0.56)"
-      : "rgba(102, 220, 255, 0.36)";
+      : livingLink
+        ? `rgba(118, 228, 255, ${drawActive ? 0.82 : 0.52})`
+        : `rgba(102, 220, 255, ${drawActive ? 0.44 : 0.18})`;
+    familyTreeCtx.lineWidth = highlighted
+      ? 2.6
+      : livingLink
+        ? drawActive ? 2.4 : 1.8
+        : drawActive ? 1.8 : 1;
+    familyTreeCtx.shadowBlur = livingLink ? 14 : drawActive ? 8 : 0;
+    familyTreeCtx.shadowColor = livingLink
+      ? "rgba(92, 214, 255, 0.9)"
+      : highlighted
+        ? "rgba(255, 241, 123, 0.56)"
+        : "rgba(102, 220, 255, 0.36)";
     strokePartialBezier(
       familyTreeCtx,
       parentPos.x,
@@ -8780,6 +8801,23 @@ function drawFamilyTreePanel() {
       lineProgress
     );
     familyTreeCtx.shadowBlur = 0;
+
+    if (livingLink) {
+      familyTreeCtx.strokeStyle = `rgba(210, 247, 255, ${drawActive ? 0.42 : 0.24})`;
+      familyTreeCtx.lineWidth = highlighted ? 1.4 : 1.1;
+      strokePartialBezier(
+        familyTreeCtx,
+        parentPos.x,
+        parentPos.y + 6,
+        parentPos.x,
+        controlY,
+        childPos.x,
+        controlY,
+        childPos.x,
+        childPos.y - 6,
+        lineProgress
+      );
+    }
 
     if (highlighted) {
       familyTreeCtx.strokeStyle = "rgba(74, 255, 212, 0.42)";
@@ -8816,13 +8854,17 @@ function drawFamilyTreePanel() {
     const highlighted = trail.has(node.id);
     const alive = node.alive;
     const labelVisible = highlighted || (alive && generationNodes.length <= 8);
-    const baseNodeSize = highlighted
-      ? 10 + Math.min(4, node.offspringCount * 0.6)
-      : 6 + Math.min(3, node.offspringCount * 0.25);
+    const baseNodeSize = alive
+      ? highlighted
+        ? 13 + Math.min(5, node.offspringCount * 0.65)
+        : 9 + Math.min(4, node.offspringCount * 0.32)
+      : highlighted
+        ? 10 + Math.min(4, node.offspringCount * 0.6)
+        : 6 + Math.min(3, node.offspringCount * 0.25);
     const flashStrength = animation?.flashStrength ?? 0;
     const nodeSize = baseNodeSize * (animation?.popScale ?? 1);
     const fillColor = alive
-      ? `hsla(${node.hue}, 84%, 64%, ${highlighted ? 0.98 : 0.82})`
+      ? `hsla(${node.hue}, 92%, ${highlighted ? 74 : 69}%, ${highlighted ? 0.99 : 0.94})`
       : highlighted
         ? "rgba(255, 241, 123, 0.64)"
         : "rgba(139, 191, 202, 0.34)";
@@ -8859,8 +8901,26 @@ function drawFamilyTreePanel() {
       familyTreeCtx.stroke();
     }
 
-    familyTreeCtx.shadowBlur = highlighted ? 18 : alive ? 8 : 0;
-    familyTreeCtx.shadowColor = highlighted ? "rgba(255, 241, 123, 0.72)" : fillColor;
+    if (alive) {
+      familyTreeCtx.globalCompositeOperation = "lighter";
+      familyTreeCtx.fillStyle = highlighted
+        ? "rgba(255, 241, 123, 0.16)"
+        : "rgba(102, 220, 255, 0.18)";
+      const livingHaloSize = nodeSize + 4;
+      familyTreeCtx.fillRect(
+        Math.round(position.x - livingHaloSize * 0.5),
+        Math.round(position.y - livingHaloSize * 0.5),
+        Math.round(livingHaloSize),
+        Math.round(livingHaloSize)
+      );
+    }
+
+    familyTreeCtx.shadowBlur = highlighted ? 22 : alive ? 15 : 0;
+    familyTreeCtx.shadowColor = highlighted
+      ? "rgba(255, 241, 123, 0.78)"
+      : alive
+        ? "rgba(102, 220, 255, 0.84)"
+        : fillColor;
     familyTreeCtx.fillStyle = fillColor;
     familyTreeCtx.fillRect(
       Math.round(position.x - nodeSize * 0.5),
@@ -8873,9 +8933,9 @@ function drawFamilyTreePanel() {
     familyTreeCtx.strokeStyle = highlighted
       ? "rgba(255, 241, 123, 0.96)"
       : alive
-        ? "rgba(221, 250, 255, 0.42)"
+        ? "rgba(221, 250, 255, 0.86)"
         : "rgba(102, 220, 255, 0.18)";
-    familyTreeCtx.lineWidth = highlighted ? 2 : 1;
+    familyTreeCtx.lineWidth = highlighted ? 2.2 : alive ? 1.6 : 1;
     familyTreeCtx.strokeRect(
       Math.round(position.x - nodeSize * 0.5) - 0.5,
       Math.round(position.y - nodeSize * 0.5) - 0.5,
