@@ -96,25 +96,25 @@ const DEFAULT_CONFIG = {
   memoryWriteBlend: 0.22,
   segmentGeneMin: 3,
   segmentGeneMax: 8,
-  segmentFollowStiffness: 0.045,
-  segmentConstraintPull: 0.18,
-  segmentVelocityDamping: 0.9,
-  segmentAngleFollow: 0.028,
-  segmentAngleCarry: 0.007,
-  segmentAngularDamping: 0.32,
-  segmentMaxAngularSpeed: 0.035,
-  segmentAngleResponse: 0.08,
-  segmentAngleResponseTail: 0.025,
+  segmentFollowStiffness: 0.022,
+  segmentConstraintPull: 0.135,
+  segmentVelocityDamping: 0.935,
+  segmentAngleFollow: 0.02,
+  segmentAngleCarry: 0.0045,
+  segmentAngularDamping: 0.38,
+  segmentMaxAngularSpeed: 0.045,
+  segmentAngleResponse: 0.072,
+  segmentAngleResponseTail: 0.022,
   segmentMaxSpeed: 2.4,
   segmentCollisionTransfer: 0.1,
   segmentImpactSpread: 0.58,
   segmentWallBounce: 0.34,
-  segmentTurnCurlStrength: 0.9,
-  segmentWaveAmplitude: 0.16,
+  segmentTurnCurlStrength: 0.18,
+  segmentWaveAmplitude: 0.05,
   segmentWaveFrequency: 0.34,
   segmentWaveLag: 0.82,
-  segmentWaveVelocityCarry: 0.035,
-  segmentWaveAngleInfluence: 0.2,
+  segmentWaveVelocityCarry: 0.012,
+  segmentWaveAngleInfluence: 0.04,
   slitherSideThrust: 0.045,
   slitherTurnAssist: 0.008,
   segmentSignalSmoothing: 0.14,
@@ -4207,7 +4207,7 @@ function relaxCreatureSegments(creature, iterations = 1) {
     const progress = getSegmentProgress(i, adultCount);
     const spacing = getSegmentSpacing(bodyMetrics, adultCount, i);
     const wavePhase = creature.movePhase * CONFIG.segmentWaveFrequency - i * CONFIG.segmentWaveLag;
-    const waveStrength = locomotionDrive * (0.24 + progress * 0.92);
+    const waveStrength = locomotionDrive * (0.06 + progress * 0.22);
     const waveOffset =
       Math.sin(wavePhase) *
       bodyMetrics.headLength *
@@ -4220,20 +4220,20 @@ function relaxCreatureSegments(creature, iterations = 1) {
       waveStrength;
     const anchorX = parentX - Math.cos(parentAngle) * spacing - Math.sin(parentAngle) * waveOffset;
     const anchorY = parentY - Math.sin(parentAngle) * spacing + Math.cos(parentAngle) * waveOffset;
-    const leaderPull = CONFIG.segmentFollowStiffness * (0.92 - progress * 0.18);
-    const inheritedVelocity = 0.08 + (1 - progress) * 0.06;
-    const turnBias = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.08 + progress * 0.12);
+    const leaderPull = CONFIG.segmentFollowStiffness * (0.84 - progress * 0.16);
+    const inheritedVelocity = 0.038 + (1 - progress) * 0.032;
+    const turnBias = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.018 + progress * 0.03);
 
     segment.vx =
       segment.vx * CONFIG.segmentVelocityDamping +
       (anchorX - segment.x) * leaderPull +
       parentVX * inheritedVelocity +
-      -Math.sin(parentAngle) * (turnBias * 0.12 + waveVelocity);
+      -Math.sin(parentAngle) * (turnBias * 0.045 + waveVelocity);
     segment.vy =
       segment.vy * CONFIG.segmentVelocityDamping +
       (anchorY - segment.y) * leaderPull +
       parentVY * inheritedVelocity +
-      Math.cos(parentAngle) * (turnBias * 0.12 + waveVelocity);
+      Math.cos(parentAngle) * (turnBias * 0.045 + waveVelocity);
 
     const segmentSpeed = Math.hypot(segment.vx, segment.vy);
     if (segmentSpeed > CONFIG.segmentMaxSpeed) {
@@ -4304,7 +4304,7 @@ function relaxCreatureSegments(creature, iterations = 1) {
       normalizeAngle(chainAngle - segment.angle) * (CONFIG.segmentAngleFollow * (1 - progress * 0.18));
     const carryPull =
       normalizeAngle(parentAngle - segment.angle) * (CONFIG.segmentAngleCarry * (0.9 - progress * 0.18));
-    const turnImpulse = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.02 + progress * 0.045);
+    const turnImpulse = normalizedTurn * CONFIG.segmentTurnCurlStrength * (0.006 + progress * 0.014);
 
     segment.angularVelocity =
       (segment.angularVelocity + anglePull + carryPull + turnImpulse) * CONFIG.segmentAngularDamping;
