@@ -138,7 +138,7 @@ const DEFAULT_CONFIG = {
   soundVolume: 0.3
 };
 
-const DRAMATIC_COLOR_MUTATION_CHANCE = 0.02;
+const DRAMATIC_COLOR_MUTATION_CHANCE = 0.05;
 const DEFAULT_COLOR_GENES = Object.freeze({
   hue: 42,
   saturation: 92,
