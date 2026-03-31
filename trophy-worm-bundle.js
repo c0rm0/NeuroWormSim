@@ -11,6 +11,18 @@ window.BUNDLED_TROPHY_WORM_PAYLOAD = {
     "ageFrames": 7311,
     "generation": 188,
     "hue": 274.5689383531285,
+    "colorGenes": {
+      "hue": 274.5689383531285,
+      "saturation": 92,
+      "lightness": 62,
+      "segmentShadeDepth": 10,
+      "highlightHueShift": 0,
+      "highlightSaturation": 100,
+      "highlightLightness": 82,
+      "eggHueShift": 0,
+      "eggSaturation": 48,
+      "eggLightness": 84
+    },
     "segmentGene": 4
   },
   "specimen": {
@@ -18,6 +30,18 @@ window.BUNDLED_TROPHY_WORM_PAYLOAD = {
     "y": 234.14679895757823,
     "heading": -6950.848533349895,
     "hue": 274.5689383531285,
+    "colorGenes": {
+      "hue": 274.5689383531285,
+      "saturation": 92,
+      "lightness": 62,
+      "segmentShadeDepth": 10,
+      "highlightHueShift": 0,
+      "highlightSaturation": 100,
+      "highlightLightness": 82,
+      "eggHueShift": 0,
+      "eggSaturation": 48,
+      "eggLightness": 84
+    },
     "energy": 75.28407896441284,
     "age": 7311,
     "generation": 188,

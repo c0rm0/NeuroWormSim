@@ -136,6 +136,20 @@ const DEFAULT_CONFIG = {
   soundVolume: 0.3
 };
 
+const DRAMATIC_COLOR_MUTATION_CHANCE = 0.02;
+const DEFAULT_COLOR_GENES = Object.freeze({
+  hue: 42,
+  saturation: 92,
+  lightness: 62,
+  segmentShadeDepth: 10,
+  highlightHueShift: 0,
+  highlightSaturation: 100,
+  highlightLightness: 82,
+  eggHueShift: 0,
+  eggSaturation: 48,
+  eggLightness: 84
+});
+
 const CONFIG = {
   ...DEFAULT_CONFIG
 };
@@ -393,15 +407,18 @@ const state = {
   featured: null,
   archiveBrain: null,
   archiveHue: 42,
+  archiveColorGenes: null,
   archiveSegmentGene: 5,
   bestEverAge: 0,
   extinctionCandidateBrain: null,
   extinctionCandidateHue: 42,
+  extinctionCandidateColorGenes: null,
   extinctionCandidateAge: 0,
   extinctionCandidateGeneration: 1,
   extinctionCandidateSegmentGene: 5,
   recentExtinctionBrain: null,
   recentExtinctionHue: 42,
+  recentExtinctionColorGenes: null,
   recentExtinctionGeneration: 1,
   recentExtinctionSegmentGene: 5,
   extinctionFrames: 0,
@@ -677,6 +694,184 @@ function dampAngle(current, target, factor) {
 
 function normalizeHueValue(value) {
   return ((value % 360) + 360) % 360;
+}
+
+function clampPercent(value, min = 0, max = 100) {
+  return clamp(Math.round(value), min, max);
+}
+
+function normalizeColorGenes(colorGenes = null, fallbackHue = DEFAULT_COLOR_GENES.hue) {
+  const source = colorGenes && typeof colorGenes === "object" ? colorGenes : {};
+  return {
+    hue: normalizeHueValue(
+      Number.isFinite(source.hue)
+        ? source.hue
+        : Number.isFinite(fallbackHue)
+          ? fallbackHue
+          : DEFAULT_COLOR_GENES.hue
+    ),
+    saturation: clampPercent(source.saturation ?? DEFAULT_COLOR_GENES.saturation, 48, 100),
+    lightness: clampPercent(source.lightness ?? DEFAULT_COLOR_GENES.lightness, 36, 78),
+    segmentShadeDepth: clampPercent(source.segmentShadeDepth ?? DEFAULT_COLOR_GENES.segmentShadeDepth, 4, 18),
+    highlightHueShift: clamp(Math.round(source.highlightHueShift ?? DEFAULT_COLOR_GENES.highlightHueShift), -180, 180),
+    highlightSaturation: clampPercent(source.highlightSaturation ?? DEFAULT_COLOR_GENES.highlightSaturation, 52, 100),
+    highlightLightness: clampPercent(source.highlightLightness ?? DEFAULT_COLOR_GENES.highlightLightness, 56, 90),
+    eggHueShift: clamp(Math.round(source.eggHueShift ?? DEFAULT_COLOR_GENES.eggHueShift), -180, 180),
+    eggSaturation: clampPercent(source.eggSaturation ?? DEFAULT_COLOR_GENES.eggSaturation, 18, 86),
+    eggLightness: clampPercent(source.eggLightness ?? DEFAULT_COLOR_GENES.eggLightness, 68, 94)
+  };
+}
+
+function cloneColorGenes(colorGenes = null, fallbackHue = DEFAULT_COLOR_GENES.hue) {
+  return normalizeColorGenes(colorGenes, fallbackHue);
+}
+
+function createRandomColorGenes(baseHue = rand(0, 360)) {
+  return normalizeColorGenes(
+    {
+      hue: baseHue,
+      saturation: rand(72, 100),
+      lightness: rand(52, 70),
+      segmentShadeDepth: rand(7, 14),
+      highlightHueShift: rand(-18, 18),
+      highlightSaturation: rand(82, 100),
+      highlightLightness: rand(74, 88),
+      eggHueShift: rand(-10, 10),
+      eggSaturation: rand(34, 62),
+      eggLightness: rand(78, 90)
+    },
+    baseHue
+  );
+}
+
+function mutateColorGenes(parentColorGenes) {
+  const base = normalizeColorGenes(parentColorGenes);
+  if (Math.random() < DRAMATIC_COLOR_MUTATION_CHANCE) {
+    return normalizeColorGenes(
+      {
+        hue: Math.random() < 0.65 ? base.hue + rand(-180, 180) : rand(0, 360),
+        saturation: base.saturation + rand(-30, 30),
+        lightness: base.lightness + rand(-18, 18),
+        segmentShadeDepth: base.segmentShadeDepth + rand(-7, 7),
+        highlightHueShift: base.highlightHueShift + rand(-110, 110),
+        highlightSaturation: base.highlightSaturation + rand(-24, 24),
+        highlightLightness: base.highlightLightness + rand(-18, 18),
+        eggHueShift: base.eggHueShift + rand(-95, 95),
+        eggSaturation: base.eggSaturation + rand(-20, 20),
+        eggLightness: base.eggLightness + rand(-12, 8)
+      },
+      base.hue
+    );
+  }
+
+  return normalizeColorGenes(
+    {
+      hue: base.hue + rand(-12, 12),
+      saturation: base.saturation + rand(-6, 6),
+      lightness: base.lightness + rand(-5, 5),
+      segmentShadeDepth: base.segmentShadeDepth + rand(-2.5, 2.5),
+      highlightHueShift: base.highlightHueShift + rand(-14, 14),
+      highlightSaturation: base.highlightSaturation + rand(-8, 8),
+      highlightLightness: base.highlightLightness + rand(-7, 7),
+      eggHueShift: base.eggHueShift + rand(-10, 10),
+      eggSaturation: base.eggSaturation + rand(-6, 6),
+      eggLightness: base.eggLightness + rand(-5, 5)
+    },
+    base.hue
+  );
+}
+
+function getEntityColorGenes(entity) {
+  if (entity?.colorGenes) {
+    return entity.colorGenes;
+  }
+  const fallbackHue = Number.isFinite(entity?.hue) ? entity.hue : DEFAULT_COLOR_GENES.hue;
+  return normalizeColorGenes(null, fallbackHue);
+}
+
+function formatHslColor(hue, saturation, lightness, alpha = 1) {
+  const normalizedHue = Math.round(normalizeHueValue(hue));
+  const normalizedSaturation = clampPercent(saturation);
+  const normalizedLightness = clampPercent(lightness);
+  if (alpha >= 0.999) {
+    return `hsl(${normalizedHue} ${normalizedSaturation}% ${normalizedLightness}%)`;
+  }
+  return `hsla(${normalizedHue} ${normalizedSaturation}% ${normalizedLightness}% / ${alpha})`;
+}
+
+function getEntityBodyColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(colorGenes.hue, colorGenes.saturation, colorGenes.lightness, alpha);
+}
+
+function getEntityBodyShadowColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue,
+    colorGenes.saturation + 4,
+    colorGenes.lightness + 10,
+    alpha
+  );
+}
+
+function getEntityDormantBodyColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue,
+    Math.max(12, colorGenes.saturation * 0.3),
+    Math.max(18, colorGenes.lightness * 0.55),
+    alpha
+  );
+}
+
+function getEntityDormantBodyShadowColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue,
+    Math.max(10, colorGenes.saturation * 0.24),
+    Math.max(14, colorGenes.lightness * 0.44),
+    alpha
+  );
+}
+
+function getEntitySegmentColor(entity, progress = 0, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue,
+    colorGenes.saturation,
+    colorGenes.lightness - progress * colorGenes.segmentShadeDepth,
+    alpha
+  );
+}
+
+function getEntityHighlightColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue + colorGenes.highlightHueShift,
+    colorGenes.highlightSaturation,
+    colorGenes.highlightLightness,
+    alpha
+  );
+}
+
+function getEntityEggShellColor(entity, alpha = 1) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue + colorGenes.eggHueShift,
+    colorGenes.eggSaturation,
+    colorGenes.eggLightness,
+    alpha
+  );
+}
+
+function getEntityEggShadowColor(entity, alpha = 0.35) {
+  const colorGenes = getEntityColorGenes(entity);
+  return formatHslColor(
+    colorGenes.hue + colorGenes.eggHueShift,
+    colorGenes.eggSaturation + 10,
+    colorGenes.eggLightness - 12,
+    alpha
+  );
 }
 
 function normalizeAngle(angle) {
@@ -2446,12 +2641,14 @@ function syncExtinctionLineagePreview(scene = state.extinctionScene) {
 }
 
 function cloneExtinctionSpecimen(creature) {
+  const colorGenes = cloneColorGenes(creature.colorGenes, creature.hue);
   return {
     id: creature.id,
     x: creature.x,
     y: creature.y,
     heading: creature.heading,
-    hue: creature.hue,
+    hue: colorGenes.hue,
+    colorGenes,
     energy: creature.energy,
     age: creature.age,
     generation: creature.generation,
@@ -2540,11 +2737,14 @@ function cloneBrainBankSpecimen(specimen, brainOverride = null) {
     throw new Error("Specimen brain data is missing.");
   }
 
+  const colorGenes = cloneColorGenes(specimen?.colorGenes, specimen?.hue ?? DEFAULT_COLOR_GENES.hue);
+
   return {
     x: Number.isFinite(specimen?.x) ? specimen.x : WIDTH * 0.5,
     y: Number.isFinite(specimen?.y) ? specimen.y : HEIGHT * 0.5,
     heading: Number.isFinite(specimen?.heading) ? specimen.heading : -0.18,
-    hue: normalizeHueValue(specimen?.hue ?? 42),
+    hue: colorGenes.hue,
+    colorGenes,
     energy: Number.isFinite(specimen?.energy) ? specimen.energy : CONFIG.startingEnergy,
     age: Math.max(0, Math.round(specimen?.age ?? 0)),
     generation: Math.max(1, Math.round(specimen?.generation ?? 1)),
@@ -2626,6 +2826,7 @@ function createBrainBankEntry(source, options = {}) {
     brain,
     specimen,
     hue: specimen.hue,
+    colorGenes: cloneColorGenes(specimen.colorGenes, specimen.hue),
     generation: specimen.generation,
     segmentGene: specimen.segmentGene,
     ageFrames: specimen.age
@@ -2649,6 +2850,7 @@ function createBrainBankFilePayload(entry) {
       ageFrames: entry.ageFrames,
       generation: entry.generation,
       hue: entry.hue,
+      colorGenes: cloneColorGenes(entry.colorGenes, entry.hue),
       segmentGene: entry.segmentGene
     },
     specimen: cloneBrainBankSpecimen(entry.specimen, entry.brain),
@@ -3229,6 +3431,7 @@ function spawnBrainBankCreature(entry, options = {}) {
   const clone = createCreature(null, {
     brainOverride: entry.brain,
     hueOverride: entry.hue,
+    colorGenesOverride: entry.colorGenes,
     segmentGeneOverride: entry.segmentGene,
     generationOverride: entry.generation,
     positionOverride: randomInteriorPosition(CONFIG.creatureRadius),
@@ -3267,6 +3470,7 @@ function createBrainBankEntryFromFilePayload(payload, fileName) {
   const metadata = payload?.metadata || {};
   const specimenSource = payload?.specimen || {
     hue: metadata.hue,
+    colorGenes: metadata.colorGenes,
     energy: CONFIG.startingEnergy,
     age: metadata.ageFrames,
     generation: metadata.generation,
@@ -3304,6 +3508,7 @@ function createHonoredWormEntryFromFilePayload(payload, descriptor = {}) {
   const fileName = descriptor.fileName || metadata.fileName || "bundled-honored-worm.json";
   const specimenSource = payload?.specimen || {
     hue: metadata.hue,
+    colorGenes: metadata.colorGenes,
     energy: CONFIG.startingEnergy,
     age: metadata.ageFrames,
     generation: metadata.generation,
@@ -3324,6 +3529,7 @@ function createHonoredWormEntryFromFilePayload(payload, descriptor = {}) {
     brain: cloneBrain(brain),
     specimen,
     hue: specimen.hue,
+    colorGenes: cloneColorGenes(specimen.colorGenes, specimen.hue),
     generation: specimen.generation,
     segmentGene: specimen.segmentGene,
     ageFrames: specimen.age,
@@ -3521,9 +3727,17 @@ function createCreature(parent = null, options = {}) {
     velocityX: options.velocityOverride?.vx ?? parent?.vx ?? 0
   });
 
-  const hue = options.hueOverride !== undefined
-    ? normalizeHueValue(options.hueOverride)
-    : normalizeHueValue(parent ? parent.hue + rand(-12, 12) : rand(20, 65));
+  const colorGenes = options.colorGenesOverride
+    ? cloneColorGenes(
+        options.colorGenesOverride,
+        options.hueOverride !== undefined
+          ? options.hueOverride
+          : parent?.hue ?? DEFAULT_COLOR_GENES.hue
+      )
+    : parent
+      ? mutateColorGenes(parent.colorGenes ?? { hue: parent.hue })
+      : createRandomColorGenes(options.hueOverride !== undefined ? options.hueOverride : rand(0, 360));
+  const hue = colorGenes.hue;
   const brain = options.brainOverride
     ? cloneBrain(options.brainOverride)
     : parent
@@ -3553,6 +3767,7 @@ function createCreature(parent = null, options = {}) {
     generation,
     children: 0,
     hue,
+    colorGenes,
     segmentGene,
     brain,
     senses: null,
@@ -4516,15 +4731,17 @@ function buildExtinctionScene() {
     const segmentGene = inherited
       ? mutateSegmentGene(state.extinctionCandidateSegmentGene)
       : randomSegmentGene();
-    const hue = inherited
-      ? normalizeHueValue(state.extinctionCandidateHue + rand(-12, 12))
-      : normalizeHueValue(rand(20, 65));
+    const colorGenes = inherited
+      ? mutateColorGenes(state.extinctionCandidateColorGenes ?? { hue: state.extinctionCandidateHue })
+      : createRandomColorGenes(rand(0, 360));
+    const hue = colorGenes.hue;
 
     plans.push({
       inherited,
       lineageId: state.nextCreatureId++,
       brain,
       hue,
+      colorGenes,
       segmentGene,
       generation: inherited ? state.extinctionCandidateGeneration + 1 : 1,
       position: positions[i],
@@ -4585,6 +4802,9 @@ function buildExtinctionScene() {
     generationFramesTotal,
     sourceBrain: hasSourceBrain ? cloneBrain(state.extinctionCandidateBrain) : null,
     sourceHue: state.extinctionCandidateHue,
+    sourceColorGenes: state.extinctionCandidateColorGenes
+      ? cloneColorGenes(state.extinctionCandidateColorGenes, state.extinctionCandidateHue)
+      : null,
     sourceGeneration: state.extinctionCandidateGeneration,
     sourceSpecimen: state.extinctionSpecimen
       ? {
@@ -4617,6 +4837,7 @@ function buildBrainBankScene(entry) {
     specimen: cloneBrainBankSpecimen(entry.specimen, entry.brain),
     brain: cloneBrain(entry.brain),
     hue: entry.hue,
+    colorGenes: cloneColorGenes(entry.colorGenes, entry.hue),
     generation: entry.generation
   };
 }
@@ -4727,11 +4948,13 @@ function seedWorld() {
   state.extinctionLogged = false;
   state.extinctionCandidateBrain = null;
   state.extinctionCandidateHue = 42;
+  state.extinctionCandidateColorGenes = null;
   state.extinctionCandidateAge = 0;
   state.extinctionCandidateGeneration = 1;
   state.extinctionCandidateSegmentGene = 5;
   state.recentExtinctionBrain = null;
   state.recentExtinctionHue = 42;
+  state.recentExtinctionColorGenes = null;
   state.recentExtinctionGeneration = 1;
   state.recentExtinctionSegmentGene = 5;
   state.extinctionSpecimen = null;
@@ -5080,6 +5303,7 @@ function recordArchive(creature, includeForExtinction = true) {
     state.bestEverAge = creature.age;
     state.archiveBrain = cloneBrain(creature.brain);
     state.archiveHue = creature.hue;
+    state.archiveColorGenes = cloneColorGenes(creature.colorGenes, creature.hue);
     state.archiveSegmentGene = creature.segmentGene;
   }
 
@@ -5087,6 +5311,7 @@ function recordArchive(creature, includeForExtinction = true) {
     state.extinctionCandidateAge = creature.age;
     state.extinctionCandidateBrain = cloneBrain(creature.brain);
     state.extinctionCandidateHue = creature.hue;
+    state.extinctionCandidateColorGenes = cloneColorGenes(creature.colorGenes, creature.hue);
     state.extinctionCandidateGeneration = creature.generation;
     state.extinctionCandidateSegmentGene = creature.segmentGene;
   }
@@ -5348,6 +5573,10 @@ function reseedIfNeeded() {
       state.extinctionCandidateAge = state.extinctionSpecimen.age;
       state.extinctionCandidateBrain = cloneBrain(state.extinctionSpecimen.brain);
       state.extinctionCandidateHue = state.extinctionSpecimen.hue;
+      state.extinctionCandidateColorGenes = cloneColorGenes(
+        state.extinctionSpecimen.colorGenes,
+        state.extinctionSpecimen.hue
+      );
       state.extinctionCandidateGeneration = state.extinctionSpecimen.generation;
       state.extinctionCandidateSegmentGene = state.extinctionSpecimen.segmentGene;
     }
@@ -5369,6 +5598,9 @@ function reseedIfNeeded() {
   if (state.extinctionScene.sourceBrain) {
     state.recentExtinctionBrain = cloneBrain(state.extinctionScene.sourceBrain);
     state.recentExtinctionHue = state.extinctionCandidateHue;
+    state.recentExtinctionColorGenes = state.extinctionCandidateColorGenes
+      ? cloneColorGenes(state.extinctionCandidateColorGenes, state.extinctionCandidateHue)
+      : null;
     state.recentExtinctionGeneration = state.extinctionCandidateGeneration;
     state.recentExtinctionSegmentGene = state.extinctionCandidateSegmentGene;
   }
@@ -5386,6 +5618,7 @@ function reseedIfNeeded() {
         idOverride: plan.lineageId,
         brainOverride: plan.brain,
         hueOverride: plan.hue,
+        colorGenesOverride: plan.colorGenes,
         segmentGeneOverride: plan.segmentGene,
         generationOverride: plan.generation,
         lineageParentIdOverride: plan.inherited ? state.extinctionSpecimen?.id ?? null : null,
@@ -5402,6 +5635,7 @@ function reseedIfNeeded() {
   state.lineageTick = 0;
   state.extinctionCandidateBrain = null;
   state.extinctionCandidateHue = 42;
+  state.extinctionCandidateColorGenes = null;
   state.extinctionCandidateAge = 0;
   state.extinctionCandidateGeneration = 1;
   state.extinctionCandidateSegmentGene = 5;
@@ -6485,8 +6719,9 @@ function drawExtinctionSpecimen(ctx, specimen, x, y, scale, heading, alpha, curl
   const headingY = Math.sin(heading);
   const normalX = -headingY;
   const normalY = headingX;
-  const bodyColor = `hsla(${specimen.hue} 92% 62% / ${alpha})`;
-  const bodyShadow = `hsla(${specimen.hue} 95% 72% / ${0.28 * alpha})`;
+  const bodyColor = getEntityBodyColor(specimen, alpha);
+  const bodyShadow = getEntityBodyShadowColor(specimen, 0.28 * alpha);
+  const highlightColor = getEntityHighlightColor(specimen, 0.24 * alpha);
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -6522,7 +6757,7 @@ function drawExtinctionSpecimen(ctx, specimen, x, y, scale, heading, alpha, curl
     ctx.fillRect(-Math.round(segLength * 0.5) - 1, -Math.round(segHeight * 0.5), segLength + 2, segHeight);
     ctx.fillStyle = "#14283b";
     ctx.fillRect(-Math.round(segLength * 0.46), -Math.round(segHeight * 0.42), Math.round(segLength * 0.92), Math.round(segHeight * 0.84));
-    ctx.fillStyle = `hsla(${specimen.hue} 92% ${Math.round(62 - progress * 10)}% / ${alpha})`;
+    ctx.fillStyle = getEntitySegmentColor(specimen, progress, alpha);
     ctx.fillRect(-Math.round(segLength * 0.4), -Math.round(segHeight * 0.38), Math.round(segLength * 0.8), Math.round(segHeight * 0.76));
     ctx.restore();
   }
@@ -6536,7 +6771,7 @@ function drawExtinctionSpecimen(ctx, specimen, x, y, scale, heading, alpha, curl
   ctx.fillRect(-Math.round(headLength * 0.46), -Math.round(headHeight * 0.44), Math.round(headLength * 0.92), Math.round(headHeight * 0.88));
   ctx.fillStyle = bodyColor;
   ctx.fillRect(-Math.round(headLength * 0.4), -Math.round(headHeight * 0.38), Math.round(headLength * 0.8), Math.round(headHeight * 0.76));
-  ctx.fillStyle = `hsla(${specimen.hue} 100% 82% / ${0.24 * alpha})`;
+  ctx.fillStyle = highlightColor;
   ctx.fillRect(Math.round(headLength * 0.06), -Math.max(2, Math.round(headHeight * 0.28)), Math.max(3, Math.round(headLength * 0.22)), Math.max(3, Math.round(headHeight * 0.54)));
 
   const eyeOffsetX = Math.round(headLength * 0.16);
@@ -6626,8 +6861,9 @@ function drawSpecimenHeadScanPanel(ctx, specimen, brain, x, y, width, height, sc
   const brainW = Math.round(headWidth * 0.42);
   const brainH = Math.round(headHeight * 0.6);
   const scanLineX = insetX + 8 + (insetW - 16) * scanProgress;
-  const bodyColor = `hsla(${specimen.hue} 92% 62% / 0.96)`;
-  const bodyShadow = `hsla(${specimen.hue} 95% 72% / 0.34)`;
+  const bodyColor = getEntityBodyColor(specimen, 0.96);
+  const bodyShadow = getEntityBodyShadowColor(specimen, 0.34);
+  const highlightColor = getEntityHighlightColor(specimen, 0.3);
 
   ctx.save();
   ctx.fillStyle = "rgba(5, 15, 24, 0.86)";
@@ -6684,7 +6920,7 @@ function drawSpecimenHeadScanPanel(ctx, specimen, brain, x, y, width, height, sc
     headFillW,
     headFillH
   );
-  ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + pulse * 0.08})`;
+  ctx.fillStyle = highlightColor;
   ctx.fillRect(
     Math.round(headCenterX + headFillW * 0.04),
     Math.round(headCenterY - headFillH * 0.28),
@@ -7904,7 +8140,7 @@ function drawSegmentedBody(layout, creature, bodyColor, bodyShadow) {
     const fillWidth = Math.round(segment.length * 0.84);
     const fillHeight = Math.round(segment.height * 0.84);
     const segmentColor = creature.alive
-      ? `hsl(${creature.hue} 92% ${Math.round(62 - segment.progress * 10)}%)`
+      ? getEntitySegmentColor(creature, segment.progress)
       : bodyColor;
 
     worldCtx.save();
@@ -7938,9 +8174,9 @@ function drawSegmentedBody(layout, creature, bodyColor, bodyShadow) {
   }
 }
 
-function drawEggSprite(width, height, hue, crackProgress = 0, alpha = 1) {
-  const shellColor = `hsl(${hue} 48% 84%)`;
-  const shellShadow = `hsla(${hue} 60% 72% / 0.35)`;
+function drawEggSprite(width, height, entity, crackProgress = 0, alpha = 1) {
+  const shellColor = getEntityEggShellColor(entity);
+  const shellShadow = getEntityEggShadowColor(entity, 0.35);
   const coreWidth = Math.max(4, Math.round(width));
   const coreHeight = Math.max(6, Math.round(height));
   const shineWidth = Math.max(2, Math.round(coreWidth * 0.18));
@@ -8012,7 +8248,7 @@ function drawBirthingEggOverlay(layout, creature, bodyMetrics) {
   worldCtx.save();
   worldCtx.translate(x, y);
   worldCtx.rotate(angle);
-  drawEggSprite(eggWidth, eggHeight, creature.hue, 0, 0.84);
+  drawEggSprite(eggWidth, eggHeight, creature, 0, 0.84);
   worldCtx.restore();
 }
 
@@ -8022,7 +8258,7 @@ function drawEggCreature(creature, isFeatured) {
   const eggWidth = Math.round(10 * radiusScale * pulse);
   const eggHeight = Math.round(14 * radiusScale * pulse);
   const crackProgress = 1 - clamp(creature.eggTimer / CONFIG.eggHatchFrames, 0, 1);
-  drawEggSprite(eggWidth, eggHeight, creature.hue, crackProgress);
+  drawEggSprite(eggWidth, eggHeight, creature, crackProgress);
 }
 
 function drawCreature(creature, isFeatured) {
@@ -8042,11 +8278,11 @@ function drawCreature(creature, isFeatured) {
   const headLength = bodyMetrics.headLength;
   const headHeight = bodyMetrics.headHeight;
   const bodyColor = creature.alive
-    ? `hsl(${creature.hue} 92% 62%)`
-    : `hsla(${creature.hue} 28% 34% / ${0.9 - deathProgress * 0.45})`;
+    ? getEntityBodyColor(creature)
+    : getEntityDormantBodyColor(creature, 0.9 - deathProgress * 0.45);
   const bodyShadow = creature.alive
-    ? `hsla(${creature.hue} 95% 72% / 0.3)`
-    : `rgba(10, 18, 28, ${0.36 - deathProgress * 0.18})`;
+    ? getEntityBodyShadowColor(creature, 0.3)
+    : getEntityDormantBodyShadowColor(creature, 0.36 - deathProgress * 0.18);
 
   drawBirthingEggOverlay(bodyMetrics.segmentLayout, creature, bodyMetrics);
   drawSegmentedBody(bodyMetrics.segmentLayout, creature, bodyColor, bodyShadow);
@@ -8084,7 +8320,7 @@ function drawCreature(creature, isFeatured) {
   );
 
   worldCtx.fillStyle = creature.alive
-    ? `hsla(${creature.hue} 100% 82% / 0.28)`
+    ? getEntityHighlightColor(creature, 0.28)
     : `rgba(255, 170, 196, ${0.16 - deathProgress * 0.08})`;
   worldCtx.fillRect(
     Math.round(headLength * 0.06),

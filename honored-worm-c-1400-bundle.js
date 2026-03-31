@@ -14,6 +14,18 @@ window.BUNDLED_HONORED_WORM_PAYLOADS.push({
     "ageFrames": 14055,
     "generation": 77,
     "hue": 3.6932681786723265,
+    "colorGenes": {
+      "hue": 3.6932681786723265,
+      "saturation": 92,
+      "lightness": 62,
+      "segmentShadeDepth": 10,
+      "highlightHueShift": 0,
+      "highlightSaturation": 100,
+      "highlightLightness": 82,
+      "eggHueShift": 0,
+      "eggSaturation": 48,
+      "eggLightness": 84
+    },
     "segmentGene": 4
   },
   "specimen": {
@@ -21,6 +33,18 @@ window.BUNDLED_HONORED_WORM_PAYLOADS.push({
     "y": 237.33949621599436,
     "heading": 3701.940682960626,
     "hue": 3.6932681786723265,
+    "colorGenes": {
+      "hue": 3.6932681786723265,
+      "saturation": 92,
+      "lightness": 62,
+      "segmentShadeDepth": 10,
+      "highlightHueShift": 0,
+      "highlightSaturation": 100,
+      "highlightLightness": 82,
+      "eggHueShift": 0,
+      "eggSaturation": 48,
+      "eggLightness": 84
+    },
     "energy": 86.97905730950423,
     "age": 14055,
     "generation": 77,
