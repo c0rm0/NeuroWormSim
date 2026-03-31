@@ -2093,6 +2093,7 @@ function registerLineageCreature(creature, parentId = null) {
     node.parentId = resolvedParentId;
     node.generation = Math.max(1, Math.round(creature.generation || 1));
     node.hue = normalizeHueValue(creature.hue ?? node.hue ?? 42);
+    node.colorGenes = cloneColorGenes(creature.colorGenes, creature.hue ?? node.hue ?? 42);
     node.age = creature.age || 0;
     node.alive = creature.alive !== false;
     node.lifeStage = creature.lifeStage || node.lifeStage || "adult";
@@ -2110,6 +2111,7 @@ function registerLineageCreature(creature, parentId = null) {
       birthOrder: state.lineageBirthOrder++,
       generation: Math.max(1, Math.round(creature.generation || 1)),
       hue: normalizeHueValue(creature.hue ?? 42),
+      colorGenes: cloneColorGenes(creature.colorGenes, creature.hue ?? 42),
       age: creature.age || 0,
       alive: creature.alive !== false,
       lifeStage: creature.lifeStage || "adult",
@@ -2154,6 +2156,7 @@ function registerLineagePreviewNode(descriptor, parentId = null) {
       birthOrder: state.lineageBirthOrder++,
       generation: Math.max(1, Math.round(descriptor.generation || 1)),
       hue: normalizeHueValue(descriptor.hue ?? 42),
+      colorGenes: cloneColorGenes(descriptor.colorGenes, descriptor.hue ?? 42),
       age: 0,
       alive: true,
       lifeStage: descriptor.lifeStage || "egg",
@@ -2193,6 +2196,7 @@ function updateLineageCreatureNode(creature) {
   const previousGeneration = Math.max(1, Math.round(node.generation || 1));
   node.generation = Math.max(1, Math.round(creature.generation || 1));
   node.hue = normalizeHueValue(creature.hue ?? node.hue);
+  node.colorGenes = cloneColorGenes(creature.colorGenes, creature.hue ?? node.hue);
   node.age = creature.age || 0;
   node.alive = creature.alive !== false;
   node.lifeStage = creature.lifeStage || node.lifeStage;
@@ -2634,6 +2638,7 @@ function syncExtinctionLineagePreview(scene = state.extinctionScene) {
         id: plan.lineageId,
         generation: plan.generation,
         hue: plan.hue,
+        colorGenes: plan.colorGenes,
         lifeStage: "egg",
         recentAction: plan.inherited ? "SYNTH" : "FORGED"
       },
@@ -9528,6 +9533,44 @@ function getFamilyTreeBackgroundCanvas(width, height, maxGeneration, familyTreeL
   return buffer.canvas;
 }
 
+function isFamilyTreeNodeRecentDeath(node) {
+  return Boolean(
+    node
+    && !node.alive
+    && Number.isFinite(node.deathTick)
+    && Math.max(0, state.tick - node.deathTick) < FAMILY_TREE_DEATH_WINK_FRAMES
+  );
+}
+
+function getFamilyTreeNodeLinkColor(node, alpha = 1) {
+  return node?.alive || isFamilyTreeNodeRecentDeath(node)
+    ? getEntityBodyColor(node, alpha)
+    : getEntityDormantBodyColor(node, alpha);
+}
+
+function getFamilyTreeNodeAccentColor(node, alpha = 1) {
+  return node?.alive || isFamilyTreeNodeRecentDeath(node)
+    ? getEntityHighlightColor(node, alpha)
+    : getEntityDormantBodyShadowColor(node, alpha);
+}
+
+function createFamilyTreeGradient(ctx, startNode, endNode, startX, startY, endX, endY, startAlpha, endAlpha, accent = false) {
+  const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+  gradient.addColorStop(
+    0,
+    accent
+      ? getFamilyTreeNodeAccentColor(startNode, startAlpha)
+      : getFamilyTreeNodeLinkColor(startNode, startAlpha)
+  );
+  gradient.addColorStop(
+    1,
+    accent
+      ? getFamilyTreeNodeAccentColor(endNode, endAlpha)
+      : getFamilyTreeNodeLinkColor(endNode, endAlpha)
+  );
+  return gradient;
+}
+
 function drawFamilyTreePanel() {
   const layoutData = getLineageLayoutData();
   const { nodes, nodesByGeneration, sortedNodes, maxGeneration } = layoutData;
@@ -9648,6 +9691,8 @@ function drawFamilyTreePanel() {
 
   familyTreeCtx.save();
   familyTreeCtx.globalCompositeOperation = "lighter";
+  familyTreeCtx.lineCap = "round";
+  familyTreeCtx.lineJoin = "round";
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
     if (node.parentId === null || node.parentId === undefined) {
@@ -9655,6 +9700,9 @@ function drawFamilyTreePanel() {
     }
 
     const parentNode = state.lineageNodes.get(node.parentId);
+    if (!parentNode) {
+      continue;
+    }
     const parentPos = renderPositions.get(node.parentId);
     const childPos = renderPositions.get(node.id);
     if (!parentPos || !childPos) {
@@ -9686,67 +9734,104 @@ function drawFamilyTreePanel() {
       : lineProgress;
     const controlY = (parentPos.y + childPos.y) * 0.5;
     const drawActive = lineProgress < 0.999;
-    familyTreeCtx.strokeStyle = highlighted
-      ? `rgba(255, 241, 123, ${drawActive ? 0.96 : 0.84})`
+    const startX = parentPos.x;
+    const startY = parentPos.y + 6;
+    const endX = childPos.x;
+    const endY = childPos.y - 6;
+    const baseAlpha = highlighted
+      ? drawActive ? 0.98 : 0.88
       : livingLink
-        ? `rgba(118, 228, 255, ${drawActive ? 0.82 : 0.52})`
-        : `rgba(102, 220, 255, ${drawActive ? 0.44 : 0.18})`;
+        ? drawActive ? 0.88 : 0.68
+        : drawActive ? 0.62 : 0.34;
+    familyTreeCtx.strokeStyle = createFamilyTreeGradient(
+      familyTreeCtx,
+      parentNode,
+      node,
+      startX,
+      startY,
+      endX,
+      endY,
+      baseAlpha,
+      baseAlpha
+    );
     familyTreeCtx.lineWidth = highlighted
-      ? 2.6
+      ? 4.8
       : livingLink
-        ? drawActive ? 2.4 : 1.8
-        : drawActive ? 1.8 : 1;
-    familyTreeCtx.shadowBlur = livingLink ? 14 : drawActive ? 8 : 0;
-    familyTreeCtx.shadowColor = livingLink
-      ? "rgba(92, 214, 255, 0.9)"
-      : highlighted
-        ? "rgba(255, 241, 123, 0.56)"
-        : "rgba(102, 220, 255, 0.36)";
+        ? drawActive ? 4.1 : 3.3
+        : drawActive ? 3.1 : 2.3;
+    familyTreeCtx.shadowBlur = highlighted ? 18 : livingLink ? 15 : drawActive ? 10 : 0;
+    familyTreeCtx.shadowColor = highlighted
+      ? getFamilyTreeNodeAccentColor(node, 0.78)
+      : livingLink
+        ? getFamilyTreeNodeAccentColor(node, 0.62)
+        : getFamilyTreeNodeAccentColor(node, 0.34);
     strokePartialBezier(
       familyTreeCtx,
-      parentPos.x,
-      parentPos.y + 6,
-      parentPos.x,
+      startX,
+      startY,
+      startX,
       controlY,
-      childPos.x,
+      endX,
       controlY,
-      childPos.x,
-      childPos.y - 6,
+      endX,
+      endY,
       lineProgress
     );
     familyTreeCtx.shadowBlur = 0;
 
     if (livingLink || retractingLivingLink) {
-      familyTreeCtx.strokeStyle = `rgba(210, 247, 255, ${drawActive ? 0.42 : 0.24})`;
-      familyTreeCtx.lineWidth = highlighted ? 1.4 : 1.1;
+      familyTreeCtx.strokeStyle = createFamilyTreeGradient(
+        familyTreeCtx,
+        parentNode,
+        node,
+        startX,
+        startY,
+        endX,
+        endY,
+        highlighted ? 0.84 : drawActive ? 0.48 : 0.3,
+        highlighted ? 0.84 : drawActive ? 0.48 : 0.3,
+        true
+      );
+      familyTreeCtx.lineWidth = highlighted ? 2.7 : 2.1;
       strokeBezierRange(
         familyTreeCtx,
-        parentPos.x,
-        parentPos.y + 6,
-        parentPos.x,
+        startX,
+        startY,
+        startX,
         controlY,
-        childPos.x,
+        endX,
         controlY,
-        childPos.x,
-        childPos.y - 6,
+        endX,
+        endY,
         livingGlowStart,
         livingGlowEnd
       );
     }
 
     if (highlighted) {
-      familyTreeCtx.strokeStyle = "rgba(74, 255, 212, 0.42)";
-      familyTreeCtx.lineWidth = 1;
+      familyTreeCtx.strokeStyle = createFamilyTreeGradient(
+        familyTreeCtx,
+        parentNode,
+        node,
+        startX,
+        startY,
+        endX,
+        endY,
+        0.54,
+        0.54,
+        true
+      );
+      familyTreeCtx.lineWidth = 1.5;
       strokePartialBezier(
         familyTreeCtx,
-        parentPos.x,
-        parentPos.y + 6,
-        parentPos.x,
+        startX,
+        startY,
+        startX,
         controlY,
-        childPos.x,
+        endX,
         controlY,
-        childPos.x,
-        childPos.y - 6,
+        endX,
+        endY,
         lineProgress
       );
     }
@@ -9790,12 +9875,30 @@ function drawFamilyTreePanel() {
     const flashStrength = animation?.flashStrength ?? 0;
     const nodeSize = baseNodeSize * (animation?.popScale ?? 1);
     const fillColor = recentDeath
-      ? `hsla(${node.hue}, 92%, ${highlighted ? 74 : 69}%, ${0.94 - deathProgress * 0.48})`
+      ? getEntityBodyColor(node, 0.94 - deathProgress * 0.48)
       : alive
-      ? `hsla(${node.hue}, 92%, ${highlighted ? 74 : 69}%, ${highlighted ? 0.99 : 0.94})`
+      ? getEntityBodyColor(node, highlighted ? 0.99 : 0.94)
+      : getEntityDormantBodyColor(node, highlighted ? 0.72 : 0.34);
+    const haloColor = recentDeath
+      ? getEntityHighlightColor(node, 0.1 + (1 - deathProgress) * 0.2)
+      : alive
+        ? getEntityHighlightColor(node, highlighted ? 0.18 : 0.14)
+        : getEntityDormantBodyShadowColor(node, highlighted ? 0.18 : 0.08);
+    const shadowColor = recentDeath
+      ? getEntityHighlightColor(node, 0.48 + (1 - deathProgress) * 0.36)
       : highlighted
-        ? "rgba(255, 241, 123, 0.64)"
-        : "rgba(139, 191, 202, 0.34)";
+        ? getEntityHighlightColor(node, 0.78)
+        : alive
+          ? getEntityHighlightColor(node, 0.84)
+          : getEntityDormantBodyShadowColor(node, 0.56);
+    const strokeColor = highlighted
+      ? getEntityHighlightColor(node, 0.96)
+      : alive || recentDeath
+        ? getEntityHighlightColor(node, 0.86)
+        : getEntityDormantBodyShadowColor(node, 0.28);
+    const labelColor = highlighted
+      ? getEntityHighlightColor(node, 0.98)
+      : "rgba(221, 250, 255, 0.78)";
     const winkScale = recentDeath
       ? deathProgress < 0.55
         ? 1 - smooth01(deathProgress / 0.55) * 0.9
@@ -9817,15 +9920,15 @@ function drawFamilyTreePanel() {
         position.y,
         flashRadius
       );
-      flashGradient.addColorStop(0, `rgba(255, 255, 255, ${0.38 + flashStrength * 0.34})`);
-      flashGradient.addColorStop(0.3, `rgba(255, 241, 123, ${0.2 + flashStrength * 0.24})`);
-      flashGradient.addColorStop(1, "rgba(255, 241, 123, 0)");
+      flashGradient.addColorStop(0, getEntityHighlightColor(node, 0.38 + flashStrength * 0.34));
+      flashGradient.addColorStop(0.3, getEntityBodyColor(node, 0.2 + flashStrength * 0.24));
+      flashGradient.addColorStop(1, getEntityBodyColor(node, 0));
       familyTreeCtx.fillStyle = flashGradient;
       familyTreeCtx.beginPath();
       familyTreeCtx.arc(position.x, position.y, flashRadius, 0, TAU);
       familyTreeCtx.fill();
 
-      familyTreeCtx.strokeStyle = `rgba(255, 255, 255, ${0.34 + flashStrength * 0.54})`;
+      familyTreeCtx.strokeStyle = getEntityHighlightColor(node, 0.34 + flashStrength * 0.54);
       familyTreeCtx.lineWidth = 1 + flashStrength * 1.6;
       const rayLength = nodeSize * (0.9 + flashStrength * 0.9);
       familyTreeCtx.beginPath();
@@ -9836,30 +9939,18 @@ function drawFamilyTreePanel() {
       familyTreeCtx.stroke();
     }
 
-    if (alive || recentDeath) {
-      familyTreeCtx.globalCompositeOperation = "lighter";
-      familyTreeCtx.fillStyle = recentDeath
-        ? `rgba(255, 241, 123, ${0.1 + (1 - deathProgress) * 0.2})`
-        : highlighted
-          ? "rgba(255, 241, 123, 0.16)"
-          : "rgba(102, 220, 255, 0.18)";
-      const livingHaloSize = nodeWidth + 4;
-      familyTreeCtx.fillRect(
-        Math.round(position.x - livingHaloSize * 0.5),
-        Math.round(position.y - Math.max(nodeHeight, livingHaloSize) * 0.5),
-        Math.round(livingHaloSize),
-        Math.round(Math.max(nodeHeight, livingHaloSize))
-      );
-    }
+    familyTreeCtx.globalCompositeOperation = "lighter";
+    familyTreeCtx.fillStyle = haloColor;
+    const livingHaloSize = nodeWidth + (alive || recentDeath ? 4 : 2);
+    familyTreeCtx.fillRect(
+      Math.round(position.x - livingHaloSize * 0.5),
+      Math.round(position.y - Math.max(nodeHeight, livingHaloSize) * 0.5),
+      Math.round(livingHaloSize),
+      Math.round(Math.max(nodeHeight, livingHaloSize))
+    );
 
-    familyTreeCtx.shadowBlur = highlighted ? 22 : alive || recentDeath ? 15 : 0;
-    familyTreeCtx.shadowColor = recentDeath
-      ? `rgba(255, 241, 123, ${0.48 + (1 - deathProgress) * 0.36})`
-      : highlighted
-      ? "rgba(255, 241, 123, 0.78)"
-      : alive
-        ? "rgba(102, 220, 255, 0.84)"
-        : fillColor;
+    familyTreeCtx.shadowBlur = highlighted ? 22 : alive || recentDeath ? 15 : 8;
+    familyTreeCtx.shadowColor = shadowColor;
     familyTreeCtx.fillStyle = fillColor;
     familyTreeCtx.fillRect(
       Math.round(position.x - nodeWidth * 0.5),
@@ -9871,7 +9962,7 @@ function drawFamilyTreePanel() {
 
     if (recentDeath) {
       familyTreeCtx.globalCompositeOperation = "lighter";
-      familyTreeCtx.fillStyle = `rgba(255, 255, 255, ${0.14 + (1 - deathProgress) * 0.38})`;
+      familyTreeCtx.fillStyle = getEntityHighlightColor(node, 0.14 + (1 - deathProgress) * 0.38);
       familyTreeCtx.fillRect(
         Math.round(position.x - nodeWidth * 0.54),
         Math.round(position.y - 1),
@@ -9880,12 +9971,8 @@ function drawFamilyTreePanel() {
       );
     }
 
-    familyTreeCtx.strokeStyle = highlighted
-      ? "rgba(255, 241, 123, 0.96)"
-      : alive || recentDeath
-        ? "rgba(221, 250, 255, 0.86)"
-        : "rgba(102, 220, 255, 0.18)";
-    familyTreeCtx.lineWidth = highlighted ? 2.2 : alive || recentDeath ? 1.6 : 1;
+    familyTreeCtx.strokeStyle = strokeColor;
+    familyTreeCtx.lineWidth = highlighted ? 2.4 : alive || recentDeath ? 1.8 : 1.2;
     familyTreeCtx.strokeRect(
       Math.round(position.x - nodeWidth * 0.5) - 0.5,
       Math.round(position.y - nodeHeight * 0.5) - 0.5,
@@ -9894,7 +9981,7 @@ function drawFamilyTreePanel() {
     );
 
     if (!alive && !recentDeath) {
-      familyTreeCtx.strokeStyle = "rgba(255, 109, 179, 0.4)";
+      familyTreeCtx.strokeStyle = getEntityHighlightColor(node, 0.36);
       familyTreeCtx.beginPath();
       familyTreeCtx.moveTo(position.x - nodeWidth * 0.36, position.y - nodeHeight * 0.36);
       familyTreeCtx.lineTo(position.x + nodeWidth * 0.36, position.y + nodeHeight * 0.36);
@@ -9905,7 +9992,7 @@ function drawFamilyTreePanel() {
 
     if (labelVisible) {
       familyTreeCtx.font = highlighted ? CANVAS_FONTS.body : CANVAS_FONTS.tiny;
-      familyTreeCtx.fillStyle = highlighted ? "#fff17b" : "rgba(221, 250, 255, 0.74)";
+      familyTreeCtx.fillStyle = labelColor;
       familyTreeCtx.textAlign = "center";
       familyTreeCtx.fillText(
         `C${String(node.id).padStart(3, "0")}`,
