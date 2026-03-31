@@ -18,6 +18,7 @@ const lineageStat = document.getElementById("lineageStat");
 const creatureDetails = document.getElementById("creatureDetails");
 const familyTreeScroll = document.getElementById("familyTreeScroll");
 const familyTreeStatus = document.getElementById("familyTreeStatus");
+const exportFamilyTreeButton = document.getElementById("exportFamilyTreeButton");
 const controlDeck = document.getElementById("controlDeck");
 const collapsibleDataPanels = Array.from(document.querySelectorAll("[data-collapsible-panel]"));
 const resetControlsButton = document.getElementById("resetControlsButton");
@@ -208,6 +209,11 @@ const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_N
 const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
 const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
+const FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS = 5000;
+const FAMILY_TREE_MANUAL_SCROLL_INTENT_MS = 850;
+const FAMILY_TREE_SCROLL_SUPPRESS_MS = 140;
+const FAMILY_TREE_EXPORT_MAX_DIMENSION = 8192;
+const FAMILY_TREE_EXPORT_MAX_AREA = 16777216;
 const APP_NAME = "NeuroWormSim";
 const BRAIN_BANK_FILE_KIND = "neuro-worm-sim-brain-bank-specimen";
 const LEGACY_BRAIN_BANK_FILE_KINDS = ["retro-neural-lab-brain-bank-specimen"];
@@ -426,6 +432,10 @@ const audioState = {
   lastScanPulseTick: -9999
 };
 
+let familyTreeAutoScrollPausedUntil = 0;
+let familyTreeAutoScrollSuppressUntil = 0;
+let familyTreeManualScrollIntentUntil = 0;
+
 function rand(min, max) {
   return Math.random() * (max - min) + min;
 }
@@ -436,6 +446,12 @@ function clamp(value, min, max) {
 
 function damp(current, target, factor) {
   return current + (target - current) * factor;
+}
+
+function getNowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
 }
 
 function lerp(a, b, t) {
@@ -1754,6 +1770,10 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
     return;
   }
 
+  if (getNowMs() < familyTreeAutoScrollPausedUntil) {
+    return;
+  }
+
   const deepestNode = getDeepestLineageNode(sortedNodes);
   const deepestLivingNode = getDeepestLivingLineageNode(sortedNodes);
   const activity = getFamilyTreeActivityNode(sortedNodes, animations);
@@ -1815,14 +1835,119 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
 
   const scrollDelta = targetScrollTop - familyTreeScroll.scrollTop;
   if (Math.abs(scrollDelta) >= FAMILY_TREE_SCROLL_SNAP_DISTANCE) {
+    familyTreeAutoScrollSuppressUntil = getNowMs() + FAMILY_TREE_SCROLL_SUPPRESS_MS;
     familyTreeScroll.scrollTop = targetScrollTop;
     return;
   }
 
   const nextScrollTop = damp(familyTreeScroll.scrollTop, targetScrollTop, FAMILY_TREE_SCROLL_FOLLOW);
+  familyTreeAutoScrollSuppressUntil = getNowMs() + FAMILY_TREE_SCROLL_SUPPRESS_MS;
   familyTreeScroll.scrollTop = Math.abs(targetScrollTop - familyTreeScroll.scrollTop) < 0.75
     ? targetScrollTop
     : nextScrollTop;
+}
+
+function pauseFamilyTreeAutoScroll() {
+  familyTreeAutoScrollPausedUntil = getNowMs() + FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS;
+}
+
+function markFamilyTreeManualScrollIntent() {
+  familyTreeManualScrollIntentUntil = getNowMs() + FAMILY_TREE_MANUAL_SCROLL_INTENT_MS;
+}
+
+function handleFamilyTreeScroll() {
+  if (!familyTreeScroll) {
+    return;
+  }
+  const now = getNowMs();
+  if (now <= familyTreeAutoScrollSuppressUntil) {
+    return;
+  }
+  if (now > familyTreeManualScrollIntentUntil) {
+    return;
+  }
+  pauseFamilyTreeAutoScroll();
+}
+
+function buildFamilyTreeExportFileName() {
+  let deepestGeneration = 0;
+  for (const node of state.lineageNodes.values()) {
+    deepestGeneration = Math.max(deepestGeneration, Math.round(node.generation || 0));
+  }
+
+  const timestamp = new Date().toISOString()
+    .replace(/[:.]/g, "-")
+    .replace("T", "_")
+    .replace("Z", "");
+  return `neuro-worm-sim-family-tree-g${String(deepestGeneration).padStart(3, "0")}-${timestamp}.png`;
+}
+
+function triggerCanvasPngDownload(canvas, fileName) {
+  if (!canvas) {
+    return;
+  }
+
+  if (canvas.toBlob) {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        return;
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }, "image/png");
+    return;
+  }
+
+  const link = document.createElement("a");
+  link.href = canvas.toDataURL("image/png");
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function exportFamilyTreePng() {
+  if (!familyTreeCanvas || state.lineageNodes.size === 0) {
+    return;
+  }
+
+  drawFamilyTreePanel();
+
+  const sourceWidth = familyTreeCanvas.width;
+  const sourceHeight = familyTreeCanvas.height;
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    return;
+  }
+
+  const dimensionScale = FAMILY_TREE_EXPORT_MAX_DIMENSION / Math.max(sourceWidth, sourceHeight);
+  const areaScale = Math.sqrt(FAMILY_TREE_EXPORT_MAX_AREA / Math.max(1, sourceWidth * sourceHeight));
+  const exportScale = Math.min(1, dimensionScale, areaScale);
+  const exportWidth = Math.max(1, Math.round(sourceWidth * exportScale));
+  const exportHeight = Math.max(1, Math.round(sourceHeight * exportScale));
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = exportWidth;
+  exportCanvas.height = exportHeight;
+
+  const exportCtx = exportCanvas.getContext("2d");
+  if (!exportCtx) {
+    return;
+  }
+
+  const downscaling = exportScale < 0.999;
+  exportCtx.imageSmoothingEnabled = downscaling;
+  if ("imageSmoothingQuality" in exportCtx) {
+    exportCtx.imageSmoothingQuality = downscaling ? "high" : "medium";
+  }
+  exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+  exportCtx.drawImage(familyTreeCanvas, 0, 0, exportWidth, exportHeight);
+
+  triggerCanvasPngDownload(exportCanvas, buildFamilyTreeExportFileName());
 }
 
 function syncExtinctionLineagePreview(scene = state.extinctionScene) {
@@ -1830,19 +1955,16 @@ function syncExtinctionLineagePreview(scene = state.extinctionScene) {
     return;
   }
 
-  const generationFrame = scene.frame - scene.scanFrames;
-  if (generationFrame < 0) {
-    return;
-  }
-
   for (let slotIndex = 0; slotIndex < scene.slotTimings.length; slotIndex += 1) {
     const slotTiming = scene.slotTimings[slotIndex];
-    if (generationFrame < slotTiming.startFrame) {
+    const plan = scene.plans[slotTiming.planIndex];
+    if (!plan || !Number.isFinite(plan.lineageId)) {
       continue;
     }
 
-    const plan = scene.plans[slotTiming.planIndex];
-    if (!plan || !Number.isFinite(plan.lineageId)) {
+    const planState = getExtinctionPlanProgress(scene, slotTiming, plan);
+    const handoffReached = planState.implantActive || planState.implantProgress > 0 || planState.complete;
+    if (!handoffReached) {
       continue;
     }
 
@@ -8488,6 +8610,13 @@ function drawFamilyTreePanel() {
     ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
     : false;
 
+  if (exportFamilyTreeButton) {
+    exportFamilyTreeButton.disabled = nodes.length === 0;
+    exportFamilyTreeButton.title = nodes.length === 0
+      ? "No family tree data is available to export yet."
+      : "Save the full family tree as a PNG image.";
+  }
+
   if (nodes.length === 0) {
     if (familyTreeCanvas.height !== height) {
       familyTreeCanvas.height = height;
@@ -8847,6 +8976,12 @@ buildControlDeck();
 initializeDataPanelToggles();
 resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
+exportFamilyTreeButton?.addEventListener("click", exportFamilyTreePng);
+familyTreeScroll?.addEventListener("wheel", markFamilyTreeManualScrollIntent, { passive: true });
+familyTreeScroll?.addEventListener("touchstart", markFamilyTreeManualScrollIntent, { passive: true });
+familyTreeScroll?.addEventListener("touchmove", markFamilyTreeManualScrollIntent, { passive: true });
+familyTreeScroll?.addEventListener("pointerdown", markFamilyTreeManualScrollIntent, { passive: true });
+familyTreeScroll?.addEventListener("scroll", handleFamilyTreeScroll, { passive: true });
 openHonoredWormsButton.addEventListener("click", () => setHonoredWormsModalOpen(true));
 openBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(true));
 importBrainButton.addEventListener("click", () => brainBankFileInput.click());

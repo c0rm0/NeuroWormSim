@@ -222,6 +222,13 @@ body::after {
   min-width: 0;
 }
 
+.panel-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 10px;
+}
+
 .panel-heading h2,
 .brain-bank-monitor-copy h2,
 .brain-bank-header h2 {
@@ -1021,6 +1028,12 @@ canvas {
 
   .panel-heading {
     flex-direction: column;
+  }
+
+  .panel-heading-actions {
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .panel-toggle-button {
