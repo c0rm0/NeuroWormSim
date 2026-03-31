@@ -10252,28 +10252,85 @@ function updateStats() {
 let lastTime = 0;
 let accumulator = 0;
 const step = 1000 / 60;
+const VISIBLE_FRAME_DELTA_MAX_MS = 40;
+const BACKGROUND_FRAME_DELTA_MAX_MS = 15000;
+const BACKGROUND_FRAME_INTERVAL_MS = 250;
+let scheduledFrameHandle = null;
+let scheduledFrameUsesTimeout = false;
+let allowBackgroundDeltaOnNextFrame = false;
+
+function clearScheduledFrame() {
+  if (scheduledFrameHandle === null) {
+    return;
+  }
+  if (scheduledFrameUsesTimeout) {
+    clearTimeout(scheduledFrameHandle);
+  } else {
+    cancelAnimationFrame(scheduledFrameHandle);
+  }
+  scheduledFrameHandle = null;
+}
+
+function scheduleNextFrame() {
+  if (scheduledFrameHandle !== null) {
+    return;
+  }
+  if (document.hidden) {
+    scheduledFrameUsesTimeout = true;
+    scheduledFrameHandle = setTimeout(() => {
+      scheduledFrameHandle = null;
+      frame(getNowMs());
+    }, BACKGROUND_FRAME_INTERVAL_MS);
+    return;
+  }
+  scheduledFrameUsesTimeout = false;
+  scheduledFrameHandle = requestAnimationFrame((nextTimestamp) => {
+    scheduledFrameHandle = null;
+    frame(nextTimestamp);
+  });
+}
+
+function handleDocumentVisibilityChange() {
+  allowBackgroundDeltaOnNextFrame = !document.hidden;
+  if (!document.hidden) {
+    invalidateFamilyTreeRender(0, true);
+    familyTreeRenderState.lastRenderMs = -Infinity;
+  }
+  clearScheduledFrame();
+  scheduleNextFrame();
+}
 
 function frame(timestamp) {
   if (!lastTime) {
     lastTime = timestamp;
   }
 
-  const delta = Math.min(40, timestamp - lastTime);
+  const rawDelta = Math.max(0, timestamp - lastTime);
+  const useBackgroundDelta = document.hidden || allowBackgroundDeltaOnNextFrame;
+  const delta = Math.min(
+    useBackgroundDelta ? BACKGROUND_FRAME_DELTA_MAX_MS : VISIBLE_FRAME_DELTA_MAX_MS,
+    rawDelta
+  );
+  allowBackgroundDeltaOnNextFrame = false;
   lastTime = timestamp;
 
   if (state.brainBankModalOpen) {
     accumulator = 0;
-    updateStats();
-    drawBrainBankHabitatView();
-    requestAnimationFrame(frame);
+    if (!document.hidden) {
+      updateStats();
+      drawBrainBankHabitatView();
+    }
+    scheduleNextFrame();
     return;
   }
 
   if (state.honoredWormsModalOpen) {
     accumulator = 0;
-    updateStats();
-    drawHonoredWormCanvases();
-    requestAnimationFrame(frame);
+    if (!document.hidden) {
+      updateStats();
+      drawHonoredWormCanvases();
+    }
+    scheduleNextFrame();
     return;
   }
 
@@ -10289,10 +10346,12 @@ function frame(timestamp) {
     accumulator -= step;
   }
 
-  renderSimulationPanels();
-  drawBrainBankHabitatView();
-  drawHonoredWormCanvases();
-  requestAnimationFrame(frame);
+  if (!document.hidden) {
+    renderSimulationPanels();
+    drawBrainBankHabitatView();
+    drawHonoredWormCanvases();
+  }
+  scheduleNextFrame();
 }
 
 buildControlDeck();
@@ -10364,6 +10423,7 @@ worldCanvas.addEventListener("pointercancel", handleInfluencePointerEnd);
 worldCanvas.addEventListener("lostpointercapture", handleInfluencePointerEnd);
 window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
 window.addEventListener("keydown", unlockAudioContext);
+document.addEventListener("visibilitychange", handleDocumentVisibilityChange);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.brainBankModalOpen) {
     setBrainBankModalOpen(false);
@@ -10380,7 +10440,7 @@ state.startupScene = createStartupScene();
 chooseFeaturedCreature();
 updateStats();
 renderSimulationPanels();
-requestAnimationFrame(frame);
+scheduleNextFrame();
 loadHonoredWorms().catch(() => {
   state.honoredWormLoadState = "error";
   updateBrainBankUi();
