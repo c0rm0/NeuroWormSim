@@ -99,10 +99,12 @@ const DEFAULT_CONFIG = {
   segmentFollowStiffness: 0.045,
   segmentConstraintPull: 0.18,
   segmentVelocityDamping: 0.9,
-  segmentAngleFollow: 0.08,
-  segmentAngleCarry: 0.018,
-  segmentAngularDamping: 0.62,
-  segmentMaxAngularSpeed: 0.14,
+  segmentAngleFollow: 0.028,
+  segmentAngleCarry: 0.007,
+  segmentAngularDamping: 0.32,
+  segmentMaxAngularSpeed: 0.035,
+  segmentAngleResponse: 0.08,
+  segmentAngleResponseTail: 0.025,
   segmentMaxSpeed: 2.4,
   segmentCollisionTransfer: 0.1,
   segmentImpactSpread: 0.58,
@@ -4002,9 +4004,37 @@ function getAdultSegmentCount(creature) {
   return clampSegmentGene(creature.segmentGene);
 }
 
-function getSegmentSpacing(headLength, lifeScale, progress) {
-  const baseSpacing = headLength * (0.44 - progress * 0.06) + 2;
-  return Math.max(6, Math.round(baseSpacing * lifeScale));
+function getSegmentProgress(segmentIndex, adultCount) {
+  return adultCount <= 1 ? 0 : segmentIndex / (adultCount - 1);
+}
+
+function getSegmentLength(headLength, progress, birthBulge = 0) {
+  const segmentScale = 1 - progress * 0.22;
+  return Math.max(6, Math.round(headLength * segmentScale * (1 - birthBulge * 0.08)));
+}
+
+function getSegmentHeight(headHeight, progress, birthBulge = 0) {
+  return Math.max(
+    5,
+    Math.round(headHeight * (1 - progress * 0.18) * (1 + birthBulge * 0.5))
+  );
+}
+
+function getSegmentSpacing(bodyMetrics, adultCount, segmentIndex) {
+  const progress = getSegmentProgress(segmentIndex, adultCount);
+  const segmentLength = getSegmentLength(bodyMetrics.headLength, progress);
+
+  if (segmentIndex === 0) {
+    const headBackX = -bodyMetrics.headLength * 0.5;
+    const anchorInset = Math.abs(bodyMetrics.tailAnchorLocal.x - headBackX);
+    const headJoinOverlap = Math.max(2, bodyMetrics.headLength * 0.12);
+    return Math.max(5, Math.round(segmentLength * 0.5 + anchorInset - headJoinOverlap));
+  }
+
+  const previousProgress = getSegmentProgress(segmentIndex - 1, adultCount);
+  const previousLength = getSegmentLength(bodyMetrics.headLength, previousProgress);
+  const segmentOverlap = Math.max(1.5, bodyMetrics.headLength * (0.085 - progress * 0.015));
+  return Math.max(6, Math.round((previousLength + segmentLength) * 0.5 - segmentOverlap));
 }
 
 function ensureCreatureSegmentBodies(creature, bodyMetrics) {
@@ -4029,8 +4059,7 @@ function ensureCreatureSegmentBodies(creature, bodyMetrics) {
   let parentAngle = creature.heading;
 
   for (let i = 0; i < adultCount; i += 1) {
-    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-    const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+    const spacing = getSegmentSpacing(bodyMetrics, adultCount, i);
     let segment = creature.segmentBodies[i];
 
     if (!segment) {
@@ -4175,8 +4204,8 @@ function relaxCreatureSegments(creature, iterations = 1) {
 
   for (let i = 0; i < adultCount; i += 1) {
     const segment = creature.segmentBodies[i];
-    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-    const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+    const progress = getSegmentProgress(i, adultCount);
+    const spacing = getSegmentSpacing(bodyMetrics, adultCount, i);
     const wavePhase = creature.movePhase * CONFIG.segmentWaveFrequency - i * CONFIG.segmentWaveLag;
     const waveStrength = locomotionDrive * (0.24 + progress * 0.92);
     const waveOffset =
@@ -4235,8 +4264,8 @@ function relaxCreatureSegments(creature, iterations = 1) {
     };
 
     for (let i = 0; i < adultCount; i += 1) {
-      const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-      const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+      const progress = getSegmentProgress(i, adultCount);
+      const spacing = getSegmentSpacing(bodyMetrics, adultCount, i);
       const stiffness = CONFIG.segmentConstraintPull * (0.92 - progress * 0.18);
       const segment = creature.segmentBodies[i];
       segment.movable = true;
@@ -4245,8 +4274,8 @@ function relaxCreatureSegments(creature, iterations = 1) {
     }
 
     for (let i = adultCount - 1; i >= 1; i -= 1) {
-      const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-      const spacing = getSegmentSpacing(bodyMetrics.headLength, bodyMetrics.lifeScale, progress);
+      const progress = getSegmentProgress(i, adultCount);
+      const spacing = getSegmentSpacing(bodyMetrics, adultCount, i);
       solveSegmentConstraint(
         creature.segmentBodies[i - 1],
         creature.segmentBodies[i],
@@ -4263,7 +4292,7 @@ function relaxCreatureSegments(creature, iterations = 1) {
 
   for (let i = 0; i < adultCount; i += 1) {
     const segment = creature.segmentBodies[i];
-    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
+    const progress = getSegmentProgress(i, adultCount);
     const wavePhase = creature.movePhase * CONFIG.segmentWaveFrequency - i * CONFIG.segmentWaveLag;
     const waveAngle =
       Math.cos(wavePhase) *
@@ -4285,7 +4314,11 @@ function relaxCreatureSegments(creature, iterations = 1) {
       CONFIG.segmentMaxAngularSpeed
     );
     segment.angle = normalizeAngle(segment.angle + segment.angularVelocity);
-    segment.angle = dampAngle(segment.angle, chainAngle, 0.22 + progress * 0.05);
+    segment.angle = dampAngle(
+      segment.angle,
+      chainAngle,
+      CONFIG.segmentAngleResponse + progress * CONFIG.segmentAngleResponseTail
+    );
 
     const maxBend = 1.15 + progress * 0.35;
     segment.angle = parentAngle + clamp(
@@ -8089,14 +8122,10 @@ function buildSegmentedBodyLayout(creature, headLength, headHeight, lifeScale, t
       continue;
     }
 
-    const progress = adultCount <= 1 ? 0 : i / (adultCount - 1);
-    const segmentScale = 1 - progress * 0.22;
+    const progress = getSegmentProgress(i, adultCount);
     const birthBulge = getBirthingSegmentBulge(creature, i, segmentCount);
-    const segmentLength = Math.max(6, Math.round(headLength * segmentScale * (1 - birthBulge * 0.08)));
-    const segmentHeight = Math.max(
-      5,
-      Math.round(headHeight * (1 - progress * 0.18) * (1 + birthBulge * 0.5))
-    );
+    const segmentLength = getSegmentLength(headLength, progress, birthBulge);
+    const segmentHeight = getSegmentHeight(headHeight, progress, birthBulge);
     const radius = Math.max(4, segmentHeight * 0.44);
 
     const segment = {

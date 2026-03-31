@@ -62,13 +62,13 @@
       </section>
 
       <aside class="side-stack">
-        <section class="panel action-panel data-panel" data-collapsible-panel>
+        <section class="panel action-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
             <div class="panel-heading-copy">
               <h2>Specimen Vault</h2>
               <p>Sample the current champion, open the honored gallery, or step into the brain bank archive.</p>
             </div>
-            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="false" title="Expand this data panel.">EXPAND</button>
           </div>
           <div class="panel-body">
             <div class="brain-bank-actions">
@@ -80,13 +80,13 @@
           </div>
         </section>
 
-        <section class="panel network-panel data-panel" data-collapsible-panel>
+        <section class="panel network-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
             <div class="panel-heading-copy">
               <h2>Longest-Living Brain</h2>
               <p>Live signals from the oldest creature still alive.</p>
             </div>
-            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="false" title="Expand this data panel.">EXPAND</button>
           </div>
           <div class="panel-body">
             <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
@@ -102,7 +102,7 @@
             </div>
             <div class="panel-heading-actions">
               <button id="exportFamilyTreeButton" class="panel-toggle-button" type="button">SAVE PNG</button>
-              <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+              <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true" title="Minimize this data panel.">MINIMIZE</button>
             </div>
           </div>
           <div class="panel-body">
@@ -115,13 +115,13 @@
           </div>
         </section>
 
-        <section class="panel legend-panel data-panel" data-collapsible-panel>
+        <section class="panel legend-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
             <div class="panel-heading-copy">
               <h2>Signal Map</h2>
               <p>Each eye senses food, creatures, and walls by distance and angle.</p>
             </div>
-            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="false" title="Expand this data panel.">EXPAND</button>
           </div>
           <div class="panel-body">
             <div class="legend-grid">
@@ -139,13 +139,13 @@
           </div>
         </section>
 
-        <section class="panel controls-panel data-panel" data-collapsible-panel>
+        <section class="panel controls-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
             <div class="panel-heading-copy">
               <h2>Lab Controls</h2>
               <p>Tune the habitat live with retro sliders and switches for ecology, energy, motion, evolution, and sound.</p>
             </div>
-            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="false" title="Expand this data panel.">EXPAND</button>
           </div>
           <div class="panel-body">
             <div id="controlDeck" class="control-deck" aria-label="Simulation controls"></div>
@@ -155,13 +155,13 @@
           </div>
         </section>
 
-        <section class="panel telemetry-panel data-panel" data-collapsible-panel>
+        <section class="panel telemetry-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
             <div class="panel-heading-copy">
               <h2>Telemetry Scope</h2>
               <p>Rolling signal graphs for population, food field, average energy, and average creature age.</p>
             </div>
-            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="false" title="Expand this data panel.">EXPAND</button>
           </div>
           <div class="panel-body">
             <canvas id="telemetryCanvas" width="360" height="860" aria-label="Simulation telemetry graphs"></canvas>
