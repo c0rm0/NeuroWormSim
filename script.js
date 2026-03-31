@@ -201,6 +201,13 @@ const FAMILY_TREE_ROW_GAP = 64;
 const FAMILY_TREE_MARGIN_X = 58;
 const FAMILY_TREE_TOP_PADDING = 34;
 const FAMILY_TREE_BOTTOM_PADDING = 30;
+const FAMILY_TREE_LINK_DRAW_FRAMES = 60;
+const FAMILY_TREE_NODE_FLASH_FRAMES = 22;
+const FAMILY_TREE_CONNECTOR_SAMPLES = 28;
+const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_NODE_FLASH_FRAMES + 18;
+const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
+const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
+const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
 const APP_NAME = "NeuroWormSim";
 const BRAIN_BANK_FILE_KIND = "neuro-worm-sim-brain-bank-specimen";
 const LEGACY_BRAIN_BANK_FILE_KINDS = ["retro-neural-lab-brain-bank-specimen"];
@@ -433,6 +440,51 @@ function damp(current, target, factor) {
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
+}
+
+function cubicBezierPoint(p0, p1, p2, p3, t) {
+  const invT = 1 - t;
+  return invT * invT * invT * p0
+    + 3 * invT * invT * t * p1
+    + 3 * invT * t * t * p2
+    + t * t * t * p3;
+}
+
+function strokePartialBezier(
+  ctx,
+  startX,
+  startY,
+  control1X,
+  control1Y,
+  control2X,
+  control2Y,
+  endX,
+  endY,
+  progress = 1
+) {
+  const clampedProgress = clamp(progress, 0, 1);
+  if (clampedProgress <= 0) {
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+
+  if (clampedProgress >= 0.999) {
+    ctx.bezierCurveTo(control1X, control1Y, control2X, control2Y, endX, endY);
+    ctx.stroke();
+    return;
+  }
+
+  const steps = Math.max(4, Math.ceil(FAMILY_TREE_CONNECTOR_SAMPLES * clampedProgress));
+  for (let stepIndex = 1; stepIndex <= steps; stepIndex += 1) {
+    const t = clampedProgress * (stepIndex / steps);
+    const pointX = cubicBezierPoint(startX, control1X, control2X, endX, t);
+    const pointY = cubicBezierPoint(startY, control1Y, control2Y, endY, t);
+    ctx.lineTo(pointX, pointY);
+  }
+
+  ctx.stroke();
 }
 
 function quadraticPoint(a, b, c, t) {
@@ -1454,39 +1506,101 @@ function resetLineageTree() {
   state.lineageBirthOrder = 0;
 }
 
+function resolveLineageParentId(parentId) {
+  return Number.isFinite(parentId) && state.lineageNodes.has(parentId)
+    ? parentId
+    : null;
+}
+
 function registerLineageCreature(creature, parentId = null) {
   if (!creature) {
     return;
   }
 
-  const resolvedParentId = Number.isFinite(parentId) && state.lineageNodes.has(parentId)
-    ? parentId
-    : null;
+  const resolvedParentId = resolveLineageParentId(parentId);
   const parentNode = resolvedParentId !== null
     ? state.lineageNodes.get(resolvedParentId)
     : null;
+  let node = state.lineageNodes.get(creature.id);
 
-  const node = {
-    id: creature.id,
-    parentId: resolvedParentId,
-    birthOrder: state.lineageBirthOrder++,
-    generation: Math.max(1, Math.round(creature.generation || 1)),
-    hue: normalizeHueValue(creature.hue ?? 42),
-    age: creature.age || 0,
-    alive: creature.alive !== false,
-    lifeStage: creature.lifeStage || "adult",
-    recentAction: creature.recentAction || "IDLE",
-    offspringCount: creature.children || 0,
-    birthTick: state.tick,
-    deathTick: null,
-    childIds: []
-  };
+  if (node) {
+    node.parentId = resolvedParentId;
+    node.generation = Math.max(1, Math.round(creature.generation || 1));
+    node.hue = normalizeHueValue(creature.hue ?? node.hue ?? 42);
+    node.age = creature.age || 0;
+    node.alive = creature.alive !== false;
+    node.lifeStage = creature.lifeStage || node.lifeStage || "adult";
+    node.recentAction = creature.recentAction || node.recentAction || "IDLE";
+    node.offspringCount = creature.children || 0;
+    node.birthTick = Number.isFinite(node.birthTick) ? node.birthTick : state.tick;
+    node.deathTick = node.alive ? null : node.deathTick ?? state.tick;
+    node.childIds = Array.isArray(node.childIds) ? node.childIds : [];
+    node.pendingBirth = false;
+  } else {
+    node = {
+      id: creature.id,
+      parentId: resolvedParentId,
+      birthOrder: state.lineageBirthOrder++,
+      generation: Math.max(1, Math.round(creature.generation || 1)),
+      hue: normalizeHueValue(creature.hue ?? 42),
+      age: creature.age || 0,
+      alive: creature.alive !== false,
+      lifeStage: creature.lifeStage || "adult",
+      recentAction: creature.recentAction || "IDLE",
+      offspringCount: creature.children || 0,
+      birthTick: state.tick,
+      deathTick: null,
+      childIds: [],
+      pendingBirth: false
+    };
 
-  state.lineageNodes.set(node.id, node);
+    state.lineageNodes.set(node.id, node);
+  }
 
   if (parentNode && !parentNode.childIds.includes(node.id)) {
     parentNode.childIds.push(node.id);
   }
+
+  return node;
+}
+
+function registerLineagePreviewNode(descriptor, parentId = null) {
+  if (!descriptor || !Number.isFinite(descriptor.id)) {
+    return null;
+  }
+
+  const resolvedParentId = resolveLineageParentId(parentId);
+  const parentNode = resolvedParentId !== null
+    ? state.lineageNodes.get(resolvedParentId)
+    : null;
+  let node = state.lineageNodes.get(descriptor.id);
+
+  if (!node) {
+    node = {
+      id: descriptor.id,
+      parentId: resolvedParentId,
+      birthOrder: state.lineageBirthOrder++,
+      generation: Math.max(1, Math.round(descriptor.generation || 1)),
+      hue: normalizeHueValue(descriptor.hue ?? 42),
+      age: 0,
+      alive: true,
+      lifeStage: descriptor.lifeStage || "egg",
+      recentAction: descriptor.recentAction || "SYNTH",
+      offspringCount: 0,
+      birthTick: state.tick,
+      deathTick: null,
+      childIds: [],
+      pendingBirth: true
+    };
+
+    state.lineageNodes.set(node.id, node);
+  }
+
+  if (parentNode && !parentNode.childIds.includes(node.id)) {
+    parentNode.childIds.push(node.id);
+  }
+
+  return node;
 }
 
 function updateLineageCreatureNode(creature) {
@@ -1545,6 +1659,204 @@ function getLineageTrailSet(focusId = getLineageFocusId()) {
   }
 
   return trail;
+}
+
+function getFamilyTreeActivityNode(sortedNodes, animations) {
+  let targetNode = null;
+  let targetAnimation = null;
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    const animation = animations.get(node.id);
+    if (!animation) {
+      continue;
+    }
+
+    const birthAge = Math.max(
+      0,
+      state.tick - (Number.isFinite(node.birthTick) ? node.birthTick : state.tick)
+    );
+    const isActive = animation.lineProgress < 0.999
+      || animation.flashStrength > 0.01
+      || birthAge <= FAMILY_TREE_ACTIVITY_WINDOW;
+    if (!isActive) {
+      continue;
+    }
+
+    if (isPreferredLineageNode(node, targetNode)) {
+      targetNode = node;
+      targetAnimation = animation;
+    }
+  }
+
+  return targetNode
+    ? { node: targetNode, animation: targetAnimation }
+    : null;
+}
+
+function isPreferredLineageNode(candidate, current) {
+  if (!candidate) {
+    return false;
+  }
+  if (!current) {
+    return true;
+  }
+
+  return candidate.generation > current.generation
+    || (
+      candidate.generation === current.generation
+      && (candidate.birthTick ?? 0) > (current.birthTick ?? 0)
+    )
+    || (
+      candidate.generation === current.generation
+      && (candidate.birthTick ?? 0) === (current.birthTick ?? 0)
+      && (candidate.birthOrder ?? 0) > (current.birthOrder ?? 0)
+    )
+    || (
+      candidate.generation === current.generation
+      && (candidate.birthTick ?? 0) === (current.birthTick ?? 0)
+      && (candidate.birthOrder ?? 0) === (current.birthOrder ?? 0)
+      && (candidate.id ?? 0) > (current.id ?? 0)
+    );
+}
+
+function getDeepestLineageNode(sortedNodes) {
+  let deepestNode = null;
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    if (isPreferredLineageNode(node, deepestNode)) {
+      deepestNode = node;
+    }
+  }
+
+  return deepestNode;
+}
+
+function getDeepestLivingLineageNode(sortedNodes) {
+  let deepestLivingNode = null;
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    if (!node.alive) {
+      continue;
+    }
+    if (isPreferredLineageNode(node, deepestLivingNode)) {
+      deepestLivingNode = node;
+    }
+  }
+
+  return deepestLivingNode;
+}
+
+function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom) {
+  if (!familyTreeScroll) {
+    return;
+  }
+
+  const deepestNode = getDeepestLineageNode(sortedNodes);
+  const deepestLivingNode = getDeepestLivingLineageNode(sortedNodes);
+  const activity = getFamilyTreeActivityNode(sortedNodes, animations);
+  const latestGenerationHasLiving = Boolean(
+    deepestNode
+    && deepestLivingNode
+    && deepestLivingNode.generation === deepestNode.generation
+  );
+  const targetNode = deepestLivingNode || activity?.node || deepestNode || null;
+  const scrollLimit = Math.max(0, familyTreeScroll.scrollHeight - familyTreeScroll.clientHeight);
+  if (scrollLimit <= 0) {
+    familyTreeScroll.scrollTop = 0;
+    return;
+  }
+
+  let targetScrollTop = null;
+  if (targetNode) {
+    if (latestGenerationHasLiving && deepestLivingNode && targetNode.id === deepestLivingNode.id) {
+      targetScrollTop = scrollLimit;
+    } else {
+      const position = positions.get(targetNode.id);
+      if (position) {
+        targetScrollTop = clamp(
+          position.y - familyTreeScroll.clientHeight * FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR,
+          0,
+          scrollLimit
+        );
+      }
+    }
+  } else if (stickToBottom) {
+    targetScrollTop = scrollLimit;
+  }
+
+  if (targetScrollTop === null && deepestLivingNode) {
+    const deepestLivingPosition = positions.get(deepestLivingNode.id);
+    if (deepestLivingPosition) {
+      targetScrollTop = clamp(
+        deepestLivingPosition.y - familyTreeScroll.clientHeight * FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR,
+        0,
+        scrollLimit
+      );
+    }
+  }
+
+  if (targetScrollTop === null && deepestNode) {
+    const deepestPosition = positions.get(deepestNode.id);
+    if (deepestPosition) {
+      targetScrollTop = clamp(
+        deepestPosition.y - familyTreeScroll.clientHeight * FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR,
+        0,
+        scrollLimit
+      );
+    }
+  }
+
+  if (targetScrollTop === null) {
+    return;
+  }
+
+  const scrollDelta = targetScrollTop - familyTreeScroll.scrollTop;
+  if (Math.abs(scrollDelta) >= FAMILY_TREE_SCROLL_SNAP_DISTANCE) {
+    familyTreeScroll.scrollTop = targetScrollTop;
+    return;
+  }
+
+  const nextScrollTop = damp(familyTreeScroll.scrollTop, targetScrollTop, FAMILY_TREE_SCROLL_FOLLOW);
+  familyTreeScroll.scrollTop = Math.abs(targetScrollTop - familyTreeScroll.scrollTop) < 0.75
+    ? targetScrollTop
+    : nextScrollTop;
+}
+
+function syncExtinctionLineagePreview(scene = state.extinctionScene) {
+  if (!scene || !Array.isArray(scene.plans) || !Array.isArray(scene.slotTimings)) {
+    return;
+  }
+
+  const generationFrame = scene.frame - scene.scanFrames;
+  if (generationFrame < 0) {
+    return;
+  }
+
+  for (let slotIndex = 0; slotIndex < scene.slotTimings.length; slotIndex += 1) {
+    const slotTiming = scene.slotTimings[slotIndex];
+    if (generationFrame < slotTiming.startFrame) {
+      continue;
+    }
+
+    const plan = scene.plans[slotTiming.planIndex];
+    if (!plan || !Number.isFinite(plan.lineageId)) {
+      continue;
+    }
+
+    registerLineagePreviewNode(
+      {
+        id: plan.lineageId,
+        generation: plan.generation,
+        hue: plan.hue,
+        lifeStage: "egg",
+        recentAction: plan.inherited ? "SYNTH" : "FORGED"
+      },
+      plan.inherited ? state.extinctionSpecimen?.id ?? null : null
+    );
+  }
 }
 
 function cloneExtinctionSpecimen(creature) {
@@ -2596,6 +2908,12 @@ async function restoreBrainBankFromDiskOnStartup() {
 function createCreature(parent = null, options = {}) {
   const radius = CONFIG.creatureRadius;
   const lineageParentId = options.lineageParentIdOverride ?? (parent ? parent.id : null);
+  const creatureId = Number.isFinite(options.idOverride)
+    ? options.idOverride
+    : state.nextCreatureId++;
+  if (Number.isFinite(options.idOverride)) {
+    state.nextCreatureId = Math.max(state.nextCreatureId, options.idOverride + 1);
+  }
   const position = options.positionOverride
     ? {
         x: clamp(options.positionOverride.x, radius + 2, WIDTH - radius - 2),
@@ -2628,7 +2946,7 @@ function createCreature(parent = null, options = {}) {
       : randomSegmentGene();
 
   const creature = {
-    id: state.nextCreatureId++,
+    id: creatureId,
     x: position.x,
     y: position.y,
     vx: velocity.vx,
@@ -3615,6 +3933,7 @@ function buildExtinctionScene() {
 
     plans.push({
       inherited,
+      lineageId: state.nextCreatureId++,
       brain,
       hue,
       segmentGene,
@@ -4437,6 +4756,7 @@ function reseedIfNeeded() {
     state.extinctionFrames,
     state.extinctionScene.totalFrames
   );
+  syncExtinctionLineagePreview(state.extinctionScene);
   if (state.extinctionFrames < state.extinctionScene.totalFrames) {
     return;
   }
@@ -4458,6 +4778,7 @@ function reseedIfNeeded() {
     state.creatures.push(
       createCreature(null, {
         lifeStage: "egg",
+        idOverride: plan.lineageId,
         brainOverride: plan.brain,
         hueOverride: plan.hue,
         segmentGeneOverride: plan.segmentGene,
@@ -8259,6 +8580,32 @@ function drawFamilyTreePanel() {
   const sortedNodes = nodes.slice().sort((a, b) =>
     a.generation - b.generation || a.birthOrder - b.birthOrder
   );
+  const animations = new Map();
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    const birthAge = Math.max(
+      0,
+      state.tick - (Number.isFinite(node.birthTick) ? node.birthTick : state.tick)
+    );
+    const hasParent = node.parentId !== null
+      && node.parentId !== undefined
+      && state.lineageNodes.has(node.parentId);
+    const revealDelay = hasParent ? FAMILY_TREE_LINK_DRAW_FRAMES : 0;
+    const revealProgress = clamp(
+      (birthAge - revealDelay) / Math.max(1, FAMILY_TREE_NODE_FLASH_FRAMES),
+      0,
+      1
+    );
+    const flashStrength = 1 - smooth01(revealProgress);
+
+    animations.set(node.id, {
+      lineProgress: hasParent ? clamp(birthAge / FAMILY_TREE_LINK_DRAW_FRAMES, 0, 1) : 1,
+      visible: !hasParent || birthAge >= revealDelay,
+      flashStrength,
+      popScale: 1 + flashStrength * 0.45
+    });
+  }
 
   familyTreeCtx.save();
   familyTreeCtx.globalCompositeOperation = "lighter";
@@ -8274,24 +8621,52 @@ function drawFamilyTreePanel() {
       continue;
     }
 
+    const animation = animations.get(node.id);
+    const lineProgress = animation?.lineProgress ?? 1;
+    if (lineProgress <= 0) {
+      continue;
+    }
+
     const highlighted = trail.has(node.id) && trail.has(node.parentId);
     const controlY = (parentPos.y + childPos.y) * 0.5;
+    const drawActive = lineProgress < 0.999;
     familyTreeCtx.strokeStyle = highlighted
-      ? "rgba(255, 241, 123, 0.84)"
-      : "rgba(102, 220, 255, 0.18)";
-    familyTreeCtx.lineWidth = highlighted ? 2.4 : 1;
-    familyTreeCtx.beginPath();
-    familyTreeCtx.moveTo(parentPos.x, parentPos.y + 6);
-    familyTreeCtx.bezierCurveTo(parentPos.x, controlY, childPos.x, controlY, childPos.x, childPos.y - 6);
-    familyTreeCtx.stroke();
+      ? `rgba(255, 241, 123, ${drawActive ? 0.96 : 0.84})`
+      : `rgba(102, 220, 255, ${drawActive ? 0.44 : 0.18})`;
+    familyTreeCtx.lineWidth = highlighted ? 2.4 : drawActive ? 1.8 : 1;
+    familyTreeCtx.shadowBlur = drawActive ? 8 : 0;
+    familyTreeCtx.shadowColor = highlighted
+      ? "rgba(255, 241, 123, 0.56)"
+      : "rgba(102, 220, 255, 0.36)";
+    strokePartialBezier(
+      familyTreeCtx,
+      parentPos.x,
+      parentPos.y + 6,
+      parentPos.x,
+      controlY,
+      childPos.x,
+      controlY,
+      childPos.x,
+      childPos.y - 6,
+      lineProgress
+    );
+    familyTreeCtx.shadowBlur = 0;
 
     if (highlighted) {
       familyTreeCtx.strokeStyle = "rgba(74, 255, 212, 0.42)";
       familyTreeCtx.lineWidth = 1;
-      familyTreeCtx.beginPath();
-      familyTreeCtx.moveTo(parentPos.x, parentPos.y + 6);
-      familyTreeCtx.bezierCurveTo(parentPos.x, controlY, childPos.x, controlY, childPos.x, childPos.y - 6);
-      familyTreeCtx.stroke();
+      strokePartialBezier(
+        familyTreeCtx,
+        parentPos.x,
+        parentPos.y + 6,
+        parentPos.x,
+        controlY,
+        childPos.x,
+        controlY,
+        childPos.x,
+        childPos.y - 6,
+        lineProgress
+      );
     }
   }
   familyTreeCtx.restore();
@@ -8303,13 +8678,20 @@ function drawFamilyTreePanel() {
       continue;
     }
 
+    const animation = animations.get(node.id);
+    if (animation && !animation.visible) {
+      continue;
+    }
+
     const generationNodes = nodesByGeneration.get(node.generation) || [];
     const highlighted = trail.has(node.id);
     const alive = node.alive;
     const labelVisible = highlighted || (alive && generationNodes.length <= 8);
-    const nodeSize = highlighted
+    const baseNodeSize = highlighted
       ? 10 + Math.min(4, node.offspringCount * 0.6)
       : 6 + Math.min(3, node.offspringCount * 0.25);
+    const flashStrength = animation?.flashStrength ?? 0;
+    const nodeSize = baseNodeSize * (animation?.popScale ?? 1);
     const fillColor = alive
       ? `hsla(${node.hue}, 84%, 64%, ${highlighted ? 0.98 : 0.82})`
       : highlighted
@@ -8317,6 +8699,37 @@ function drawFamilyTreePanel() {
         : "rgba(139, 191, 202, 0.34)";
 
     familyTreeCtx.save();
+
+    if (flashStrength > 0.001) {
+      familyTreeCtx.globalCompositeOperation = "lighter";
+      const flashRadius = nodeSize * (1.6 + flashStrength * 1.8);
+      const flashGradient = familyTreeCtx.createRadialGradient(
+        position.x,
+        position.y,
+        0,
+        position.x,
+        position.y,
+        flashRadius
+      );
+      flashGradient.addColorStop(0, `rgba(255, 255, 255, ${0.38 + flashStrength * 0.34})`);
+      flashGradient.addColorStop(0.3, `rgba(255, 241, 123, ${0.2 + flashStrength * 0.24})`);
+      flashGradient.addColorStop(1, "rgba(255, 241, 123, 0)");
+      familyTreeCtx.fillStyle = flashGradient;
+      familyTreeCtx.beginPath();
+      familyTreeCtx.arc(position.x, position.y, flashRadius, 0, TAU);
+      familyTreeCtx.fill();
+
+      familyTreeCtx.strokeStyle = `rgba(255, 255, 255, ${0.34 + flashStrength * 0.54})`;
+      familyTreeCtx.lineWidth = 1 + flashStrength * 1.6;
+      const rayLength = nodeSize * (0.9 + flashStrength * 0.9);
+      familyTreeCtx.beginPath();
+      familyTreeCtx.moveTo(position.x - rayLength, position.y);
+      familyTreeCtx.lineTo(position.x + rayLength, position.y);
+      familyTreeCtx.moveTo(position.x, position.y - rayLength);
+      familyTreeCtx.lineTo(position.x, position.y + rayLength);
+      familyTreeCtx.stroke();
+    }
+
     familyTreeCtx.shadowBlur = highlighted ? 18 : alive ? 8 : 0;
     familyTreeCtx.shadowColor = highlighted ? "rgba(255, 241, 123, 0.72)" : fillColor;
     familyTreeCtx.fillStyle = fillColor;
@@ -8376,9 +8789,7 @@ function drawFamilyTreePanel() {
     familyTreeStatus.textContent = "Live ancestry map active. Scroll to inspect older branches.";
   }
 
-  if (familyTreeScroll && stickToBottom) {
-    familyTreeScroll.scrollTop = familyTreeScroll.scrollHeight;
-  }
+  updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom);
 }
 
 function updateStats() {
