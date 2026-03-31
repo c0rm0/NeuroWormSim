@@ -51,20 +51,6 @@
     </header>
 
     <main class="sim-layout">
-      <section class="panel telemetry-panel">
-        <div class="panel-heading">
-          <h2>Telemetry Scope</h2>
-          <p>Rolling signal graphs for population, food field, average energy, and average creature age.</p>
-        </div>
-        <canvas id="telemetryCanvas" width="360" height="860" aria-label="Simulation telemetry graphs"></canvas>
-        <div class="telemetry-footnote">
-          <span class="telemetry-pill population">Population</span>
-          <span class="telemetry-pill food">Food</span>
-          <span class="telemetry-pill energy">Energy</span>
-          <span class="telemetry-pill age">Average Age</span>
-        </div>
-      </section>
-
       <section class="panel world-panel">
         <div class="panel-heading">
           <h2>Closed Habitat</h2>
@@ -76,61 +62,112 @@
       </section>
 
       <aside class="side-stack">
-        <section class="panel network-panel">
+        <section class="panel action-panel data-panel" data-collapsible-panel>
           <div class="panel-heading">
-            <h2>Longest-Living Brain</h2>
-            <p>Live signals from the oldest creature still alive.</p>
+            <div class="panel-heading-copy">
+              <h2>Specimen Vault</h2>
+              <p>Sample the current champion, open the honored gallery, or step into the brain bank archive.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
           </div>
-          <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
-          <div id="creatureDetails" class="creature-details"></div>
-          <div class="brain-bank-actions">
-            <button id="sampleLongestButton" class="retro-button" type="button">SAMPLE LONGEST-LIVED</button>
-            <button id="spawnTrophyWormButton" class="retro-button" type="button">SPAWN TROPHY WORM</button>
-            <button id="openBrainBankButton" class="retro-button retro-button-quiet" type="button">OPEN BRAIN BANK</button>
+          <div class="panel-body">
+            <div class="brain-bank-actions">
+              <button id="sampleLongestButton" class="retro-button" type="button">SAMPLE LONGEST-LIVED</button>
+              <button id="openHonoredWormsButton" class="retro-button" type="button">HONORED WORMS</button>
+              <button id="openBrainBankButton" class="retro-button retro-button-quiet" type="button">OPEN BRAIN BANK</button>
+            </div>
+            <p id="brainBankStatus" class="brain-bank-status">No preserved specimens stored yet.</p>
           </div>
-          <p id="brainBankStatus" class="brain-bank-status">No preserved specimens stored yet.</p>
         </section>
 
-        <section class="panel family-tree-panel">
+        <section class="panel network-panel data-panel" data-collapsible-panel>
           <div class="panel-heading">
-            <h2>Family Tree</h2>
-            <p>Live ancestry map of creatures, offspring, and the highlighted inheritance trail of the current longest-lived line.</p>
+            <div class="panel-heading-copy">
+              <h2>Longest-Living Brain</h2>
+              <p>Live signals from the oldest creature still alive.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
           </div>
-          <div class="family-tree-frame">
-            <div id="familyTreeScroll" class="family-tree-scroll" aria-label="Scrollable creature family tree">
-              <canvas id="familyTreeCanvas" width="620" height="360" aria-label="Live creature family tree"></canvas>
+          <div class="panel-body">
+            <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
+            <div id="creatureDetails" class="creature-details"></div>
+          </div>
+        </section>
+
+        <section class="panel family-tree-panel data-panel" data-collapsible-panel>
+          <div class="panel-heading">
+            <div class="panel-heading-copy">
+              <h2>Family Tree</h2>
+              <p>Live ancestry map of creatures, offspring, and the highlighted inheritance trail of the current longest-lived line.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+          </div>
+          <div class="panel-body">
+            <div class="family-tree-frame">
+              <div id="familyTreeScroll" class="family-tree-scroll" aria-label="Scrollable creature family tree">
+                <canvas id="familyTreeCanvas" width="620" height="360" aria-label="Live creature family tree"></canvas>
+              </div>
+            </div>
+            <p id="familyTreeStatus" class="family-tree-status">Tracking the active creature lineage.</p>
+          </div>
+        </section>
+
+        <section class="panel legend-panel data-panel" data-collapsible-panel>
+          <div class="panel-heading">
+            <div class="panel-heading-copy">
+              <h2>Signal Map</h2>
+              <p>Each eye senses food, creatures, and walls by distance and angle.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
+          </div>
+          <div class="panel-body">
+            <div class="legend-grid">
+              <div class="legend-item"><span class="legend-swatch food"></span><span>Food signals</span></div>
+              <div class="legend-item"><span class="legend-swatch creature"></span><span>Creature signals</span></div>
+              <div class="legend-item"><span class="legend-swatch wall"></span><span>Wall signals</span></div>
+              <div class="legend-item"><span class="legend-swatch positive"></span><span>Positive weights</span></div>
+              <div class="legend-item"><span class="legend-swatch negative"></span><span>Negative weights</span></div>
+              <div class="legend-item"><span class="legend-swatch focus"></span><span>Oldest survivor focus</span></div>
+            </div>
+            <div class="microcopy">
+              <p>Outputs: <strong>FORWARD</strong>, <strong>BACKWARD</strong>, <strong>LEFT</strong>, <strong>RIGHT</strong>.</p>
+              <p>Body segments now curl through turns, giving each creature a centipede-like motion profile.</p>
             </div>
           </div>
-          <p id="familyTreeStatus" class="family-tree-status">Tracking the active creature lineage.</p>
         </section>
 
-        <section class="panel legend-panel">
+        <section class="panel controls-panel data-panel" data-collapsible-panel>
           <div class="panel-heading">
-            <h2>Signal Map</h2>
-            <p>Each eye senses food, creatures, and walls by distance and angle.</p>
+            <div class="panel-heading-copy">
+              <h2>Lab Controls</h2>
+              <p>Tune the habitat live with retro sliders for ecology, energy, motion, evolution, and sound.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
           </div>
-          <div class="legend-grid">
-            <div class="legend-item"><span class="legend-swatch food"></span><span>Food signals</span></div>
-            <div class="legend-item"><span class="legend-swatch creature"></span><span>Creature signals</span></div>
-            <div class="legend-item"><span class="legend-swatch wall"></span><span>Wall signals</span></div>
-            <div class="legend-item"><span class="legend-swatch positive"></span><span>Positive weights</span></div>
-            <div class="legend-item"><span class="legend-swatch negative"></span><span>Negative weights</span></div>
-            <div class="legend-item"><span class="legend-swatch focus"></span><span>Oldest survivor focus</span></div>
-          </div>
-          <div class="microcopy">
-            <p>Outputs: <strong>FORWARD</strong>, <strong>BACKWARD</strong>, <strong>LEFT</strong>, <strong>RIGHT</strong>.</p>
-            <p>Body segments now curl through turns, giving each creature a centipede-like motion profile.</p>
+          <div class="panel-body">
+            <div id="controlDeck" class="control-deck" aria-label="Simulation controls"></div>
+            <div class="control-actions">
+              <button id="resetControlsButton" class="retro-button" type="button">RESET DEFAULTS</button>
+            </div>
           </div>
         </section>
 
-        <section class="panel controls-panel">
+        <section class="panel telemetry-panel data-panel" data-collapsible-panel>
           <div class="panel-heading">
-            <h2>Lab Controls</h2>
-            <p>Tune the habitat live with retro sliders for ecology, energy, motion, evolution, and sound.</p>
+            <div class="panel-heading-copy">
+              <h2>Telemetry Scope</h2>
+              <p>Rolling signal graphs for population, food field, average energy, and average creature age.</p>
+            </div>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true">MINIMIZE</button>
           </div>
-          <div id="controlDeck" class="control-deck" aria-label="Simulation controls"></div>
-          <div class="control-actions">
-            <button id="resetControlsButton" class="retro-button" type="button">RESET DEFAULTS</button>
+          <div class="panel-body">
+            <canvas id="telemetryCanvas" width="360" height="860" aria-label="Simulation telemetry graphs"></canvas>
+            <div class="telemetry-footnote">
+              <span class="telemetry-pill population">Population</span>
+              <span class="telemetry-pill food">Food</span>
+              <span class="telemetry-pill energy">Energy</span>
+              <span class="telemetry-pill age">Average Age</span>
+            </div>
           </div>
         </section>
       </aside>
@@ -173,7 +210,25 @@
   </div>
   <input id="brainBankFileInput" type="file" accept="application/json,.json" multiple hidden>
 
+  <div id="honoredWormsModal" class="brain-bank-modal honored-worms-modal" hidden>
+    <div class="honored-worms-dialog panel" role="dialog" aria-modal="true" aria-labelledby="honoredWormsTitle">
+      <div class="brain-bank-header">
+        <div>
+          <p class="eyebrow">HONORED SPECIMENS // BUILT-IN GALLERY</p>
+          <h2 id="honoredWormsTitle">Honored Worms</h2>
+          <p>Three built-in legendary specimens bundled with the lab. Preview them here and spawn any of them directly into the habitat.</p>
+        </div>
+        <div class="brain-bank-header-actions">
+          <button id="closeHonoredWormsButton" class="retro-button retro-button-quiet" type="button">CLOSE</button>
+        </div>
+      </div>
+      <div id="honoredWormsList" class="brain-bank-list honored-worms-list"></div>
+    </div>
+  </div>
+
   <script src="trophy-worm-bundle.js"></script>
+  <script src="honored-worm-c-1400-bundle.js"></script>
+  <script src="honored-worm-c-3471-bundle.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

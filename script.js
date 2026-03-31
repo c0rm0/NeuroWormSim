@@ -19,13 +19,17 @@ const creatureDetails = document.getElementById("creatureDetails");
 const familyTreeScroll = document.getElementById("familyTreeScroll");
 const familyTreeStatus = document.getElementById("familyTreeStatus");
 const controlDeck = document.getElementById("controlDeck");
+const collapsibleDataPanels = Array.from(document.querySelectorAll("[data-collapsible-panel]"));
 const resetControlsButton = document.getElementById("resetControlsButton");
 const sampleLongestButton = document.getElementById("sampleLongestButton");
-const spawnTrophyWormButton = document.getElementById("spawnTrophyWormButton");
+const openHonoredWormsButton = document.getElementById("openHonoredWormsButton");
 const openBrainBankButton = document.getElementById("openBrainBankButton");
 const brainBankStatus = document.getElementById("brainBankStatus");
 const brainBankModal = document.getElementById("brainBankModal");
 const brainBankList = document.getElementById("brainBankList");
+const honoredWormsModal = document.getElementById("honoredWormsModal");
+const honoredWormsList = document.getElementById("honoredWormsList");
+const closeHonoredWormsButton = document.getElementById("closeHonoredWormsButton");
 const brainBankHabitatCanvas = document.getElementById("brainBankHabitatCanvas");
 const brainBankHabitatCtx = brainBankHabitatCanvas.getContext("2d");
 const brainBankHabitatPopulation = document.getElementById("brainBankHabitatPopulation");
@@ -209,10 +213,40 @@ const BRAIN_BANK_DB_STORE = "brainBankSettings";
 const BRAIN_BANK_DIR_HANDLE_KEY = "brainBankDirectoryHandle";
 const BRAIN_BANK_FOLDER_NAME = "brain-bank";
 const BRAIN_BANK_PICKER_ID = "neurowormsim-brain-bank-root";
-const TROPHY_WORM_ASSET_PATH = "brain-bank/brain-bank/c-4555-g-188-age-07311f-20260330-015153.json";
 const TROPHY_WORM_ASSET_FILE_NAME = "c-4555-g-188-age-07311f-20260330-015153.json";
 const TROPHY_WORM_NAME = "Trophy Worm";
 const TROPHY_WORM_BUNDLE_KEY = "BUNDLED_TROPHY_WORM_PAYLOAD";
+const HONORED_WORM_BUNDLE_LIST_KEY = "BUNDLED_HONORED_WORM_PAYLOADS";
+const HONORED_WORM_DESCRIPTORS = Object.freeze([
+  {
+    bundleKey: TROPHY_WORM_BUNDLE_KEY,
+    fileName: TROPHY_WORM_ASSET_FILE_NAME,
+    displayName: TROPHY_WORM_NAME,
+    badgeLabel: "TROPHY",
+    sparkColor: "#8ed7ff",
+    recentAction: "HONOR",
+    note: "Bundled trophy specimen included with the lab."
+  },
+  {
+    fileName: "c-1400-g-77-age-14055f-20260330-160810.json",
+    displayName: "Longest-Lived C-1400",
+    badgeLabel: "HONORED 02",
+    sparkColor: "#fff17b",
+    recentAction: "HONOR",
+    note: "Bundled honored specimen included with the lab."
+  },
+  {
+    fileName: "c-3471-g-146-age-09281f-20260330-152456.json",
+    displayName: "Longest-Lived C-3471",
+    badgeLabel: "HONORED 03",
+    sparkColor: "#ffb447",
+    recentAction: "HONOR",
+    note: "Bundled honored specimen included with the lab."
+  }
+]);
+const HONORED_WORM_FILE_NAMES = new Set(
+  HONORED_WORM_DESCRIPTORS.map((descriptor) => descriptor.fileName.toLowerCase())
+);
 const INFLUENCE_TOOL_DEFAULTS = Object.freeze({
   radius: 152,
   creatureImpulse: 0.78,
@@ -355,8 +389,9 @@ const state = {
   brainBankFocusId: null,
   brainBankMessage: "No preserved specimens stored yet.",
   brainBankHabitatDrawTick: -1,
-  trophyWormEntry: null,
-  trophyWormLoadState: "idle",
+  honoredWormEntries: [],
+  honoredWormLoadState: "idle",
+  honoredWormsModalOpen: false,
   networkDisplay: null,
   startupScene: null,
   telemetryHistory: [],
@@ -372,7 +407,7 @@ const state = {
   }
 };
 
-let trophyWormLoadPromise = null;
+let honoredWormLoadPromise = null;
 
 const audioState = {
   context: null,
@@ -1567,13 +1602,38 @@ function describeBrainBankOrigin(origin) {
   return origin === "imported" ? "IMPORTED FILE" : "LIVE SAMPLE";
 }
 
-function isBundledTrophyWormFileName(fileName) {
-  return String(fileName || "").toLowerCase() === TROPHY_WORM_ASSET_FILE_NAME.toLowerCase();
+function isBundledHonoredWormFileName(fileName) {
+  return HONORED_WORM_FILE_NAMES.has(String(fileName || "").toLowerCase());
 }
 
 function getBundledTrophyWormPayload() {
   const payload = globalThis[TROPHY_WORM_BUNDLE_KEY];
   return payload && typeof payload === "object" ? payload : null;
+}
+
+function getBundledHonoredWormPayloadMap() {
+  const payloadMap = new Map();
+  const trophyPayload = getBundledTrophyWormPayload();
+  if (trophyPayload) {
+    payloadMap.set(TROPHY_WORM_ASSET_FILE_NAME, trophyPayload);
+  }
+
+  const honoredPayloads = globalThis[HONORED_WORM_BUNDLE_LIST_KEY];
+  if (!Array.isArray(honoredPayloads)) {
+    return payloadMap;
+  }
+
+  for (let i = 0; i < honoredPayloads.length; i += 1) {
+    const entry = honoredPayloads[i];
+    const fileName = String(entry?.key || entry?.payload?.metadata?.fileName || "").trim();
+    const payload = entry?.payload;
+    if (!fileName || !payload || typeof payload !== "object") {
+      continue;
+    }
+    payloadMap.set(fileName, payload);
+  }
+
+  return payloadMap;
 }
 
 function cloneBrainBankSpecimen(specimen, brainOverride = null) {
@@ -1728,6 +1788,36 @@ function renderSimulationPanels() {
   drawFamilyTreePanel();
 }
 
+function setDataPanelCollapsed(panel, collapsed) {
+  if (!panel) {
+    return;
+  }
+
+  panel.classList.toggle("is-collapsed", collapsed);
+  const toggleButton = panel.querySelector("[data-panel-toggle]");
+  if (toggleButton) {
+    toggleButton.textContent = collapsed ? "EXPAND" : "MINIMIZE";
+    toggleButton.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggleButton.title = collapsed ? "Expand this data panel." : "Minimize this data panel.";
+  }
+}
+
+function initializeDataPanelToggles() {
+  for (let i = 0; i < collapsibleDataPanels.length; i += 1) {
+    const panel = collapsibleDataPanels[i];
+    setDataPanelCollapsed(panel, panel.classList.contains("is-collapsed"));
+    const toggleButton = panel.querySelector("[data-panel-toggle]");
+    if (!toggleButton) {
+      continue;
+    }
+
+    toggleButton.addEventListener("click", () => {
+      const nextCollapsed = !panel.classList.contains("is-collapsed");
+      setDataPanelCollapsed(panel, nextCollapsed);
+    });
+  }
+}
+
 async function saveBrainBankEntryToDisk(entry, promptIfMissing = false) {
   const directory = await getBrainBankDirectory({
     create: true,
@@ -1764,7 +1854,7 @@ async function loadBrainBankEntriesFromDisk() {
     if (handle.kind !== "file" || !name.toLowerCase().endsWith(".json")) {
       continue;
     }
-    if (isBundledTrophyWormFileName(name)) {
+    if (isBundledHonoredWormFileName(name)) {
       continue;
     }
 
@@ -1809,15 +1899,12 @@ function updateBrainBankUi() {
   const countLabel = storedCount > 0 ? ` (${String(storedCount).padStart(2, "0")})` : "";
   openBrainBankButton.textContent = `OPEN BRAIN BANK${countLabel}`;
   sampleLongestButton.disabled = !state.featured || isBrainBankBusy();
-  spawnTrophyWormButton.disabled =
-    isBrainBankBusy() ||
-    getLivingCreaturesCount() >= CONFIG.maxCreatures ||
-    state.trophyWormLoadState === "loading";
-  spawnTrophyWormButton.title = state.trophyWormLoadState === "loading"
-    ? "Loading the bundled Trophy Worm specimen."
-    : state.trophyWormEntry
-      ? "Spawn the built-in Trophy Worm specimen into the habitat."
-      : "Retry loading the bundled Trophy Worm specimen.";
+  openHonoredWormsButton.disabled = state.honoredWormLoadState === "loading";
+  openHonoredWormsButton.title = state.honoredWormLoadState === "loading"
+    ? "Loading the built-in Honored Worms gallery."
+    : state.honoredWormEntries.length > 0
+      ? `Browse ${state.honoredWormEntries.length} built-in honored specimens.`
+      : "Open the built-in honored specimen gallery.";
 
   let status = state.brainBankMessage;
   if (state.brainBankScene) {
@@ -1835,6 +1922,7 @@ function updateBrainBankUi() {
   }
   brainBankStatus.textContent = status;
   updateBrainBankHabitatStrip();
+  updateHonoredWormsModalUi();
 }
 
 function setBrainBankModalOpen(open, focusId = state.brainBankFocusId) {
@@ -1848,6 +1936,96 @@ function setBrainBankModalOpen(open, focusId = state.brainBankFocusId) {
   state.brainBankHabitatDrawTick = -1;
   renderBrainBankList();
   drawBrainBankHabitatView(true);
+}
+
+function setHonoredWormsModalOpen(open) {
+  state.honoredWormsModalOpen = open;
+  honoredWormsModal.hidden = !open;
+  if (!open) {
+    return;
+  }
+
+  renderHonoredWormsList();
+  drawHonoredWormCanvases();
+  if (state.honoredWormEntries.length === 0 && state.honoredWormLoadState !== "loading") {
+    loadHonoredWorms().catch(() => {
+      setBrainBankMessage("The built-in Honored Worms gallery could not be loaded from its bundled specimen files.");
+      renderHonoredWormsList();
+    });
+  }
+}
+
+function renderHonoredWormsList() {
+  if (!state.honoredWormsModalOpen) {
+    return;
+  }
+
+  const spawnDisabled = isBrainBankBusy() || getLivingCreaturesCount() >= CONFIG.maxCreatures;
+
+  if (state.honoredWormLoadState === "loading") {
+    honoredWormsList.innerHTML = `
+      <div class="brain-bank-empty">
+        <p>Loading the honored specimen gallery.</p>
+        <p>The built-in worms are being unpacked from their bundled files.</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (state.honoredWormEntries.length === 0) {
+    honoredWormsList.innerHTML = `
+      <div class="brain-bank-empty">
+        <p>No honored worms are available right now.</p>
+        <p>Reload the page to retry loading the built-in specimen gallery.</p>
+      </div>
+    `;
+    return;
+  }
+
+  honoredWormsList.innerHTML = state.honoredWormEntries.map((entry) => `
+    <article class="brain-bank-card" data-honored-entry-id="${escapeHtml(entry.fileName)}">
+      <div class="brain-bank-card-head">
+        <div>
+          <h3 class="brain-bank-card-title">${escapeHtml(entry.displayName)}</h3>
+          <p class="brain-bank-card-copy">BUILT-IN HONORED SPECIMEN // ${escapeHtml(entry.fileName)}</p>
+        </div>
+        <span class="brain-bank-chip">${escapeHtml(entry.badgeLabel || "HONORED")}</span>
+      </div>
+      <div class="brain-bank-preview-grid">
+        <div class="brain-bank-preview">
+          <span>Neural Map</span>
+          <canvas width="260" height="164" data-honored-brain-preview="${escapeHtml(entry.fileName)}"></canvas>
+        </div>
+        <div class="brain-bank-preview">
+          <span>Body Profile</span>
+          <canvas width="220" height="164" data-honored-body-preview="${escapeHtml(entry.fileName)}"></canvas>
+        </div>
+      </div>
+      <div class="brain-bank-meta">
+        <div class="brain-bank-meta-item"><span>Age</span><strong>${formatAge(entry.ageFrames)}</strong></div>
+        <div class="brain-bank-meta-item"><span>Generation</span><strong>${entry.generation}</strong></div>
+        <div class="brain-bank-meta-item"><span>Segments</span><strong>${clampSegmentGene(entry.segmentGene)}</strong></div>
+        <div class="brain-bank-meta-item"><span>Origin</span><strong>Built-In</strong></div>
+      </div>
+      <div class="brain-bank-card-actions">
+        <button class="retro-button" type="button" data-honored-action="spawn" data-honored-entry-id="${escapeHtml(entry.fileName)}" ${spawnDisabled ? "disabled" : ""}>SPAWN INTO HABITAT</button>
+      </div>
+    </article>
+  `).join("");
+
+  drawHonoredWormCanvases();
+}
+
+function updateHonoredWormsModalUi() {
+  if (!state.honoredWormsModalOpen) {
+    return;
+  }
+
+  const spawnDisabled = isBrainBankBusy() || getLivingCreaturesCount() >= CONFIG.maxCreatures;
+  const spawnButtons = honoredWormsList.querySelectorAll("button[data-honored-action='spawn']");
+  for (let i = 0; i < spawnButtons.length; i += 1) {
+    spawnButtons[i].disabled = spawnDisabled;
+  }
 }
 
 function renderBrainBankList() {
@@ -1956,6 +2134,78 @@ function drawBrainBankHabitatView(force = false) {
   ctx.fillText(`BEST ${formatAge(state.bestEverAge)}`, canvas.width - 122, canvas.height - 34);
   ctx.fillStyle = "#8bbfca";
   ctx.fillText(`BANK ${String(state.brainBank.length).padStart(2, "0")}`, canvas.width - 122, canvas.height - 20);
+}
+
+function drawHonoredWormCanvases() {
+  if (!state.honoredWormsModalOpen) {
+    return;
+  }
+
+  const brainCanvases = honoredWormsList.querySelectorAll("[data-honored-brain-preview]");
+  for (let i = 0; i < brainCanvases.length; i += 1) {
+    const canvas = brainCanvases[i];
+    const entry = getHonoredWormEntryById(canvas.dataset.honoredBrainPreview);
+    if (!entry) {
+      continue;
+    }
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#051019";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = 0; y < canvas.height; y += 12) {
+      ctx.fillStyle = y % 24 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.014)";
+      ctx.fillRect(0, y, canvas.width, 1);
+    }
+
+    const pulse = 0.5 + Math.sin((state.tick + i * 17) * 0.05) * 0.5;
+    drawBrainBlueprint(ctx, entry.brain, 12, 14, canvas.width - 24, canvas.height - 28, {
+      alpha: 0.24 + pulse * 0.18,
+      fluxAmount: 0.12 + pulse * 0.16,
+      fluxPacketBudget: 5,
+      nodePulseBudget: 3,
+      fluxSpeedScale: 0.18,
+      fluxSelectorSpeed: 0.11,
+      nodePulseSpeed: 0.05,
+      nodePulseSelectorSpeed: 0.12,
+      fluxPhase: (i + 1) * 0.23,
+      time: state.tick
+    });
+  }
+
+  const bodyCanvases = honoredWormsList.querySelectorAll("[data-honored-body-preview]");
+  for (let i = 0; i < bodyCanvases.length; i += 1) {
+    const canvas = bodyCanvases[i];
+    const entry = getHonoredWormEntryById(canvas.dataset.honoredBodyPreview);
+    if (!entry) {
+      continue;
+    }
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#051019";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(102, 220, 255, 0.06)";
+    ctx.fillRect(18, canvas.height - 34, canvas.width - 36, 8);
+    ctx.fillStyle = "rgba(255, 241, 123, 0.08)";
+    ctx.fillRect(30, canvas.height - 22, canvas.width - 60, 1);
+
+    const pulse = 0.5 + Math.sin((state.tick + i * 23) * 0.04) * 0.5;
+    drawExtinctionSpecimen(
+      ctx,
+      entry.specimen,
+      canvas.width * 0.5,
+      canvas.height * 0.52,
+      1.22,
+      -0.2 + Math.sin(state.tick * 0.03 + i * 0.5) * 0.06,
+      0.98,
+      0.46 + pulse * 0.22,
+      0
+    );
+  }
 }
 
 function drawBrainBankCanvases() {
@@ -2143,13 +2393,14 @@ function createBrainBankEntryFromFilePayload(payload, fileName) {
   );
 }
 
-function createTrophyWormEntryFromFilePayload(payload) {
+function createHonoredWormEntryFromFilePayload(payload, descriptor = {}) {
   const brain = payload?.brain || payload?.specimen?.brain;
   if (!isValidBrainShape(brain)) {
-    throw new Error("The bundled trophy worm brain file is not compatible with this lab.");
+    throw new Error("A bundled honored worm brain file is not compatible with this lab.");
   }
 
   const metadata = payload?.metadata || {};
+  const fileName = descriptor.fileName || metadata.fileName || "bundled-honored-worm.json";
   const specimenSource = payload?.specimen || {
     hue: metadata.hue,
     energy: CONFIG.startingEnergy,
@@ -2162,79 +2413,99 @@ function createTrophyWormEntryFromFilePayload(payload) {
   const specimen = cloneBrainBankSpecimen(specimenSource, brain);
 
   return {
-    displayName: TROPHY_WORM_NAME,
+    displayName: descriptor.displayName || metadata.displayName || fileName.replace(/\.json$/i, ""),
     creatureId: metadata.sourceCreatureId ?? null,
-    origin: "trophy",
+    origin: "honored",
     sampledAtIso: payload?.exportedAt || new Date().toISOString(),
     sampledTick: metadata.sampledTick ?? 0,
-    note: "Bundled trophy specimen included with the lab.",
-    fileName: TROPHY_WORM_ASSET_FILE_NAME,
+    note: descriptor.note || "Bundled honored specimen included with the lab.",
+    fileName,
     brain: cloneBrain(brain),
     specimen,
     hue: specimen.hue,
     generation: specimen.generation,
     segmentGene: specimen.segmentGene,
-    ageFrames: specimen.age
+    ageFrames: specimen.age,
+    badgeLabel: descriptor.badgeLabel || "HONORED",
+    sparkColor: descriptor.sparkColor || "#fff17b",
+    recentAction: descriptor.recentAction || "HONOR"
   };
 }
 
-async function loadTrophyWormFromAsset(force = false) {
-  if (trophyWormLoadPromise) {
-    return trophyWormLoadPromise;
+function getHonoredWormEntryById(entryId) {
+  for (let i = 0; i < state.honoredWormEntries.length; i += 1) {
+    if (state.honoredWormEntries[i].fileName === entryId) {
+      return state.honoredWormEntries[i];
+    }
+  }
+  return null;
+}
+
+async function loadHonoredWorms(force = false) {
+  if (honoredWormLoadPromise) {
+    return honoredWormLoadPromise;
   }
 
-  if (!force && state.trophyWormEntry) {
+  if (!force && state.honoredWormEntries.length === HONORED_WORM_DESCRIPTORS.length) {
     return true;
   }
 
-  state.trophyWormLoadState = "loading";
+  state.honoredWormLoadState = "loading";
   updateBrainBankUi();
 
-  trophyWormLoadPromise = (async () => {
+  honoredWormLoadPromise = (async () => {
     try {
-      const bundledPayload = getBundledTrophyWormPayload();
-      if (bundledPayload) {
-        state.trophyWormEntry = createTrophyWormEntryFromFilePayload(bundledPayload);
-        state.trophyWormLoadState = "ready";
-        return true;
+      const payloadMap = getBundledHonoredWormPayloadMap();
+      const entries = [];
+
+      for (let i = 0; i < HONORED_WORM_DESCRIPTORS.length; i += 1) {
+        const descriptor = HONORED_WORM_DESCRIPTORS[i];
+        const payload = payloadMap.get(descriptor.fileName);
+        if (!payload) {
+          throw new Error(`Missing bundled payload for ${descriptor.fileName}`);
+        }
+        entries.push(createHonoredWormEntryFromFilePayload(payload, descriptor));
       }
 
-      const response = await fetch(TROPHY_WORM_ASSET_PATH, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const payload = JSON.parse(await response.text());
-      state.trophyWormEntry = createTrophyWormEntryFromFilePayload(payload);
-      state.trophyWormLoadState = "ready";
+      state.honoredWormEntries = entries;
+      state.honoredWormLoadState = "ready";
+      renderHonoredWormsList();
       return true;
     } catch (error) {
-      state.trophyWormEntry = null;
-      state.trophyWormLoadState = "error";
+      state.honoredWormEntries = [];
+      state.honoredWormLoadState = "error";
+      renderHonoredWormsList();
       return false;
     } finally {
-      trophyWormLoadPromise = null;
+      honoredWormLoadPromise = null;
       updateBrainBankUi();
     }
   })();
 
-  return trophyWormLoadPromise;
+  return honoredWormLoadPromise;
 }
 
-async function spawnTrophyWorm() {
-  if (!state.trophyWormEntry) {
-    setBrainBankMessage("Loading the built-in Trophy Worm specimen.");
-    const loaded = await loadTrophyWormFromAsset(true);
-    if (!loaded || !state.trophyWormEntry) {
-      setBrainBankMessage("The built-in Trophy Worm could not be loaded from its bundled brain file.");
+async function spawnHonoredWorm(entryId) {
+  if (state.honoredWormEntries.length === 0) {
+    setBrainBankMessage("Loading the built-in Honored Worms gallery.");
+    const loaded = await loadHonoredWorms(true);
+    if (!loaded || state.honoredWormEntries.length === 0) {
+      setBrainBankMessage("The built-in Honored Worms gallery could not be loaded from its bundled specimen files.");
       return;
     }
   }
 
-  spawnBrainBankCreature(state.trophyWormEntry, {
-    recentAction: "TROPHY",
-    sparkColor: "#8ed7ff",
-    busyMessage: "Wait for the active lab animation to finish before spawning the Trophy Worm.",
-    populationMessage: "Population cap reached. Lower the count or wait for space before spawning the Trophy Worm.",
+  const entry = getHonoredWormEntryById(entryId);
+  if (!entry) {
+    setBrainBankMessage("That honored specimen is not available right now.");
+    return;
+  }
+
+  spawnBrainBankCreature(entry, {
+    recentAction: entry.recentAction,
+    sparkColor: entry.sparkColor,
+    busyMessage: `Wait for the active lab animation to finish before spawning ${entry.displayName}.`,
+    populationMessage: `Population cap reached. Lower the count or wait for space before spawning ${entry.displayName}.`,
     successMessage: (entry) => `Spawned ${entry.displayName} into the habitat.`
   });
 }
@@ -2252,7 +2523,7 @@ async function importBrainBankFiles(fileList) {
 
   for (let i = 0; i < files.length; i += 1) {
     const file = files[i];
-    if (isBundledTrophyWormFileName(file.name)) {
+    if (isBundledHonoredWormFileName(file.name)) {
       reserved += 1;
       continue;
     }
@@ -2278,7 +2549,9 @@ async function importBrainBankFiles(fileList) {
     setBrainBankMessage(`Imported ${imported} brain specimen file${imported === 1 ? "" : "s"} into the vault.`);
   } else if (imported > 0) {
     const reservedCopy = reserved > 0
-      ? ` The bundled Trophy Worm stays separate and ${reserved === 1 ? "was" : "were"} not imported.`
+      ? reserved === 1
+        ? " The built-in Honored Worm stays separate and was not imported."
+        : " The built-in Honored Worms stay separate and were not imported."
       : "";
     if (failed === 0) {
       setBrainBankMessage(`Imported ${imported} brain file${imported === 1 ? "" : "s"} into the vault.${reservedCopy}`);
@@ -2286,7 +2559,7 @@ async function importBrainBankFiles(fileList) {
     }
     setBrainBankMessage(`Imported ${imported} brain file${imported === 1 ? "" : "s"} and skipped ${failed} incompatible file${failed === 1 ? "" : "s"}.`);
   } else if (reserved > 0 && failed === 0) {
-    setBrainBankMessage("The bundled Trophy Worm is already available from its own spawn button, so it was not imported into the vault.");
+    setBrainBankMessage("The built-in Honored Worms are already available from their own gallery, so they were not imported into the vault.");
   } else {
     setBrainBankMessage("No compatible brain specimen files were imported.");
   }
@@ -8155,23 +8428,27 @@ function frame(timestamp) {
 
   renderSimulationPanels();
   drawBrainBankHabitatView();
+  drawHonoredWormCanvases();
   requestAnimationFrame(frame);
 }
 
 buildControlDeck();
+initializeDataPanelToggles();
 resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
-spawnTrophyWormButton.addEventListener("click", () => {
-  spawnTrophyWorm().catch(() => {
-    setBrainBankMessage("The built-in Trophy Worm could not be loaded from its bundled brain file.");
-  });
-});
+openHonoredWormsButton.addEventListener("click", () => setHonoredWormsModalOpen(true));
 openBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(true));
 importBrainButton.addEventListener("click", () => brainBankFileInput.click());
 closeBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(false));
+closeHonoredWormsButton.addEventListener("click", () => setHonoredWormsModalOpen(false));
 brainBankModal.addEventListener("click", (event) => {
   if (event.target === brainBankModal) {
     setBrainBankModalOpen(false);
+  }
+});
+honoredWormsModal.addEventListener("click", (event) => {
+  if (event.target === honoredWormsModal) {
+    setHonoredWormsModalOpen(false);
   }
 });
 brainBankList.addEventListener("click", (event) => {
@@ -8187,6 +8464,19 @@ brainBankList.addEventListener("click", (event) => {
   }
   if (button.dataset.action === "export") {
     exportBrainBankEntry(entryId);
+  }
+});
+honoredWormsList.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-honored-action]");
+  if (!button) {
+    return;
+  }
+
+  const entryId = button.dataset.honoredEntryId;
+  if (button.dataset.honoredAction === "spawn") {
+    spawnHonoredWorm(entryId).catch(() => {
+      setBrainBankMessage("The selected honored specimen could not be spawned into the habitat.");
+    });
   }
 });
 brainBankFileInput.addEventListener("change", async () => {
@@ -8209,8 +8499,12 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.brainBankModalOpen) {
     setBrainBankModalOpen(false);
   }
+  if (event.key === "Escape" && state.honoredWormsModalOpen) {
+    setHonoredWormsModalOpen(false);
+  }
 });
 renderBrainBankList();
+renderHonoredWormsList();
 updateBrainBankUi();
 seedWorld();
 state.startupScene = createStartupScene();
@@ -8218,8 +8512,8 @@ chooseFeaturedCreature();
 updateStats();
 renderSimulationPanels();
 requestAnimationFrame(frame);
-loadTrophyWormFromAsset().catch(() => {
-  state.trophyWormLoadState = "error";
+loadHonoredWorms().catch(() => {
+  state.honoredWormLoadState = "error";
   updateBrainBankUi();
 });
 restoreBrainBankFromDiskOnStartup().catch(() => {

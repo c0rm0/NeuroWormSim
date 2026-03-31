@@ -64,7 +64,7 @@ body::after {
 }
 
 .app-shell {
-  width: min(1840px, calc(100vw - 16px));
+  width: min(2040px, calc(100vw - 12px));
   margin: 0 auto;
   padding: 10px 0 14px;
 }
@@ -168,21 +168,21 @@ body::after {
 
 .sim-layout {
   display: grid;
-  grid-template-columns: minmax(230px, 0.48fr) minmax(0, 2.35fr) minmax(300px, 0.68fr);
-  grid-template-areas: "telemetry world side";
+  grid-template-columns: minmax(540px, 1.02fr) minmax(780px, 1.42fr);
+  grid-template-areas: "side world";
   gap: var(--panel-gap);
   align-items: start;
-}
-
-.telemetry-panel {
-  grid-area: telemetry;
 }
 
 .world-panel {
   grid-area: world;
 }
 
-.telemetry-panel,
+.telemetry-panel {
+  position: static;
+  align-self: start;
+}
+
 .world-panel {
   position: sticky;
   top: var(--sticky-offset);
@@ -195,6 +195,7 @@ body::after {
 
 .telemetry-panel,
 .world-panel,
+.action-panel,
 .network-panel,
 .family-tree-panel,
 .legend-panel,
@@ -209,7 +210,16 @@ body::after {
 .panel-heading {
   position: relative;
   z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
   margin-bottom: 10px;
+}
+
+.panel-heading-copy {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .panel-heading h2,
@@ -221,6 +231,39 @@ body::after {
 .panel-heading p {
   margin: 8px 0 0;
   line-height: 1.35;
+}
+
+.panel-body {
+  position: relative;
+  z-index: 1;
+}
+
+.panel-toggle-button {
+  flex: 0 0 auto;
+  min-width: 104px;
+  border: 1px solid rgba(102, 220, 255, 0.2);
+  background: linear-gradient(180deg, rgba(18, 34, 49, 0.96), rgba(5, 12, 18, 0.98));
+  color: var(--focus);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: var(--ui-copy-size);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(74, 255, 212, 0.1);
+}
+
+.panel-toggle-button:hover {
+  border-color: rgba(255, 241, 123, 0.3);
+  box-shadow: 0 0 16px rgba(255, 241, 123, 0.14);
+}
+
+.data-panel.is-collapsed .panel-heading {
+  margin-bottom: 0;
+}
+
+.data-panel.is-collapsed .panel-body {
+  display: none;
 }
 
 .canvas-frame {
@@ -304,6 +347,7 @@ canvas {
 .side-stack {
   display: grid;
   gap: var(--panel-gap);
+  min-width: 0;
 }
 
 .creature-details {
@@ -606,6 +650,10 @@ canvas {
   z-index: 1;
 }
 
+.action-panel .brain-bank-actions {
+  margin-top: 0;
+}
+
 .brain-bank-status {
   position: relative;
   z-index: 1;
@@ -748,6 +796,17 @@ canvas {
   max-height: min(90vh, 940px);
   padding: calc(var(--panel-padding) + 4px);
   overflow: auto;
+}
+
+.honored-worms-dialog {
+  width: min(1180px, calc(100vw - 28px));
+  max-height: min(90vh, 860px);
+  padding: calc(var(--panel-padding) + 4px);
+  overflow: auto;
+}
+
+.honored-worms-list {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 
 .brain-bank-header {
@@ -900,10 +959,8 @@ canvas {
 
 @media (max-width: 1680px) {
   .sim-layout {
-    grid-template-columns: minmax(250px, 0.42fr) minmax(0, 1fr);
-    grid-template-areas:
-      "telemetry world"
-      "side world";
+    grid-template-columns: minmax(440px, 0.92fr) minmax(0, 1.18fr);
+    grid-template-areas: "side world";
   }
 }
 
@@ -911,7 +968,6 @@ canvas {
   .sim-layout {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "telemetry"
       "world"
       "side";
   }
@@ -963,6 +1019,15 @@ canvas {
       "telemetry";
   }
 
+  .panel-heading {
+    flex-direction: column;
+  }
+
+  .panel-toggle-button {
+    width: 100%;
+    min-width: 0;
+  }
+
   .status-strip {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 3px;
@@ -998,6 +1063,7 @@ canvas {
 
   .telemetry-panel,
   .world-panel,
+  .action-panel,
   .network-panel,
   .family-tree-panel,
   .legend-panel,
@@ -1037,8 +1103,17 @@ canvas {
     padding: 16px;
   }
 
+  .honored-worms-dialog {
+    width: min(100vw - 12px, 1180px);
+    padding: 16px;
+  }
+
   .brain-bank-monitor-strip {
     grid-template-columns: 1fr;
+  }
+
+  .honored-worms-dialog {
+    width: min(100vw - 10px, 1180px);
   }
 }
 
