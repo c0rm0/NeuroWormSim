@@ -418,6 +418,8 @@ const state = {
   telemetrySampleClock: 0,
   lineageNodes: new Map(),
   lineageDisplayPositions: new Map(),
+  lineageStructureVersion: 0,
+  lineageLayoutCache: null,
   lineageBirthOrder: 0,
   influenceTool: {
     pointerActive: false,
@@ -445,6 +447,11 @@ let familyTreeAutoScrollSuppressUntil = 0;
 let familyTreeManualScrollIntentUntil = 0;
 let familyTreeExpectedScrollTop = null;
 let familyTreeExpectedScrollUntil = 0;
+let worldBackgroundBuffer = null;
+let telemetryBackgroundBuffer = null;
+let networkBackgroundBuffer = null;
+let familyTreeBackgroundBuffer = { key: "", canvas: null };
+let networkPanelLayoutCache = { key: "", layout: null };
 
 function rand(min, max) {
   return Math.random() * (max - min) + min;
@@ -462,6 +469,41 @@ function getNowMs() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
+}
+
+function createBufferCanvas(width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.imageSmoothingEnabled = false;
+  }
+  return { canvas, ctx };
+}
+
+function setElementText(element, nextText) {
+  if (element && element.textContent !== nextText) {
+    element.textContent = nextText;
+  }
+}
+
+function setElementHtml(element, nextHtml) {
+  if (element && element.innerHTML !== nextHtml) {
+    element.innerHTML = nextHtml;
+  }
+}
+
+function setElementTitle(element, nextTitle) {
+  if (element && element.title !== nextTitle) {
+    element.title = nextTitle;
+  }
+}
+
+function setElementDisabled(element, disabled) {
+  if (element && element.disabled !== disabled) {
+    element.disabled = disabled;
+  }
 }
 
 function speedUpExtinctionForgeFrames(frames) {
@@ -1564,9 +1606,16 @@ function resetTelemetryHistory() {
   pushTelemetrySample(true);
 }
 
+function invalidateLineageLayoutCache() {
+  state.lineageStructureVersion += 1;
+  state.lineageLayoutCache = null;
+}
+
 function resetLineageTree() {
   state.lineageNodes = new Map();
   state.lineageDisplayPositions = new Map();
+  state.lineageStructureVersion = 0;
+  state.lineageLayoutCache = null;
   state.lineageBirthOrder = 0;
 }
 
@@ -1586,8 +1635,10 @@ function registerLineageCreature(creature, parentId = null) {
     ? state.lineageNodes.get(resolvedParentId)
     : null;
   let node = state.lineageNodes.get(creature.id);
+  let layoutChanged = false;
 
   if (node) {
+    const previousGeneration = Math.max(1, Math.round(node.generation || 1));
     node.parentId = resolvedParentId;
     node.generation = Math.max(1, Math.round(creature.generation || 1));
     node.hue = normalizeHueValue(creature.hue ?? node.hue ?? 42);
@@ -1600,6 +1651,7 @@ function registerLineageCreature(creature, parentId = null) {
     node.deathTick = node.alive ? null : node.deathTick ?? state.tick;
     node.childIds = Array.isArray(node.childIds) ? node.childIds : [];
     node.pendingBirth = false;
+    layoutChanged = node.generation !== previousGeneration;
   } else {
     node = {
       id: creature.id,
@@ -1619,10 +1671,15 @@ function registerLineageCreature(creature, parentId = null) {
     };
 
     state.lineageNodes.set(node.id, node);
+    layoutChanged = true;
   }
 
   if (parentNode && !parentNode.childIds.includes(node.id)) {
     parentNode.childIds.push(node.id);
+  }
+
+  if (layoutChanged) {
+    invalidateLineageLayoutCache();
   }
 
   return node;
@@ -1658,6 +1715,7 @@ function registerLineagePreviewNode(descriptor, parentId = null) {
     };
 
     state.lineageNodes.set(node.id, node);
+    invalidateLineageLayoutCache();
   }
 
   if (parentNode && !parentNode.childIds.includes(node.id)) {
@@ -1681,6 +1739,7 @@ function updateLineageCreatureNode(creature) {
     return;
   }
 
+  const previousGeneration = Math.max(1, Math.round(node.generation || 1));
   node.generation = Math.max(1, Math.round(creature.generation || 1));
   node.hue = normalizeHueValue(creature.hue ?? node.hue);
   node.age = creature.age || 0;
@@ -1690,6 +1749,9 @@ function updateLineageCreatureNode(creature) {
   node.offspringCount = creature.children || 0;
   if (node.alive) {
     node.deathTick = null;
+  }
+  if (node.generation !== previousGeneration) {
+    invalidateLineageLayoutCache();
   }
 }
 
@@ -1811,6 +1873,47 @@ function getDeepestLivingLineageNode(sortedNodes) {
   }
 
   return deepestLivingNode;
+}
+
+function getLineageLayoutData() {
+  const cachedLayout = state.lineageLayoutCache;
+  if (cachedLayout && cachedLayout.version === state.lineageStructureVersion) {
+    return cachedLayout;
+  }
+
+  const nodes = Array.from(state.lineageNodes.values());
+  const nodesByGeneration = new Map();
+  let maxGeneration = 1;
+
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    const generation = Math.max(1, Math.round(node.generation || 1));
+    if (!nodesByGeneration.has(generation)) {
+      nodesByGeneration.set(generation, []);
+    }
+    nodesByGeneration.get(generation).push(node);
+    if (generation > maxGeneration) {
+      maxGeneration = generation;
+    }
+  }
+
+  for (const generationNodes of nodesByGeneration.values()) {
+    generationNodes.sort((a, b) => a.birthOrder - b.birthOrder);
+  }
+
+  const sortedNodes = nodes.slice().sort((a, b) =>
+    a.generation - b.generation || a.birthOrder - b.birthOrder
+  );
+  const layoutData = {
+    version: state.lineageStructureVersion,
+    nodes,
+    nodesByGeneration,
+    sortedNodes,
+    maxGeneration
+  };
+
+  state.lineageLayoutCache = layoutData;
+  return layoutData;
 }
 
 function getFamilyTreeRenderPositions(targetPositions) {
@@ -2429,23 +2532,26 @@ function setBrainBankMessage(message) {
   updateBrainBankUi();
 }
 
-function updateBrainBankHabitatStrip() {
-  brainBankHabitatPopulation.textContent = `POP ${String(getLivingCreaturesCount()).padStart(2, "0")}`;
-  brainBankHabitatOldest.textContent = `OLDEST ${state.featured ? formatAge(state.featured.age) : "--"}`;
-  brainBankHabitatStored.textContent = `BANK ${String(state.brainBank.length).padStart(2, "0")}`;
+function updateBrainBankHabitatStrip(livingCount = getLivingCreaturesCount()) {
+  setElementText(brainBankHabitatPopulation, `POP ${String(livingCount).padStart(2, "0")}`);
+  setElementText(brainBankHabitatOldest, `OLDEST ${state.featured ? formatAge(state.featured.age) : "--"}`);
+  setElementText(brainBankHabitatStored, `BANK ${String(state.brainBank.length).padStart(2, "0")}`);
 }
 
-function updateBrainBankUi() {
+function updateBrainBankUi(livingCount = getLivingCreaturesCount()) {
   const storedCount = state.brainBank.length;
   const countLabel = storedCount > 0 ? ` (${String(storedCount).padStart(2, "0")})` : "";
-  openBrainBankButton.textContent = `OPEN BRAIN BANK${countLabel}`;
-  sampleLongestButton.disabled = !state.featured || isBrainBankBusy();
-  openHonoredWormsButton.disabled = state.honoredWormLoadState === "loading";
-  openHonoredWormsButton.title = state.honoredWormLoadState === "loading"
-    ? "Loading the built-in Honored Worms gallery."
-    : state.honoredWormEntries.length > 0
-      ? `Browse ${state.honoredWormEntries.length} built-in honored specimens.`
-      : "Open the built-in honored specimen gallery.";
+  setElementText(openBrainBankButton, `OPEN BRAIN BANK${countLabel}`);
+  setElementDisabled(sampleLongestButton, !state.featured || isBrainBankBusy());
+  setElementDisabled(openHonoredWormsButton, state.honoredWormLoadState === "loading");
+  setElementTitle(
+    openHonoredWormsButton,
+    state.honoredWormLoadState === "loading"
+      ? "Loading the built-in Honored Worms gallery."
+      : state.honoredWormEntries.length > 0
+        ? `Browse ${state.honoredWormEntries.length} built-in honored specimens.`
+        : "Open the built-in honored specimen gallery."
+  );
 
   let status = state.brainBankMessage;
   if (state.brainBankScene) {
@@ -2461,8 +2567,8 @@ function updateBrainBankUi() {
   } else if (storedCount > 0) {
     status = `${storedCount} stored specimen${storedCount === 1 ? "" : "s"}. ${status}`;
   }
-  brainBankStatus.textContent = status;
-  updateBrainBankHabitatStrip();
+  setElementText(brainBankStatus, status);
+  updateBrainBankHabitatStrip(livingCount);
   updateHonoredWormsModalUi();
 }
 
@@ -7305,27 +7411,51 @@ function drawExtinctionScene() {
   worldCtx.restore();
 }
 
-function drawBackground() {
-  worldCtx.fillStyle = "#041018";
-  worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
+function getWorldBackgroundCanvas() {
+  if (worldBackgroundBuffer?.canvas?.width === WIDTH && worldBackgroundBuffer.canvas.height === HEIGHT) {
+    return worldBackgroundBuffer.canvas;
+  }
+
+  const buffer = createBufferCanvas(WIDTH, HEIGHT);
+  const ctx = buffer.ctx;
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "#041018";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   for (let y = 0; y < HEIGHT; y += 16) {
-    worldCtx.fillStyle = y % 32 === 0 ? "rgba(102, 220, 255, 0.045)" : "rgba(102, 220, 255, 0.018)";
-    worldCtx.fillRect(0, y, WIDTH, 1);
+    ctx.fillStyle = y % 32 === 0 ? "rgba(102, 220, 255, 0.045)" : "rgba(102, 220, 255, 0.018)";
+    ctx.fillRect(0, y, WIDTH, 1);
   }
 
   for (let x = 0; x < WIDTH; x += 16) {
-    worldCtx.fillStyle = x % 32 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
-    worldCtx.fillRect(x, 0, 1, HEIGHT);
+    ctx.fillStyle = x % 32 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    ctx.fillRect(x, 0, 1, HEIGHT);
   }
 
-  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.35)";
-  worldCtx.lineWidth = 4;
-  worldCtx.strokeRect(2, 2, WIDTH - 4, HEIGHT - 4);
+  ctx.strokeStyle = "rgba(102, 220, 255, 0.35)";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, WIDTH - 4, HEIGHT - 4);
 
-  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.12)";
-  worldCtx.lineWidth = 1;
-  worldCtx.strokeRect(10, 10, WIDTH - 20, HEIGHT - 20);
+  ctx.strokeStyle = "rgba(102, 220, 255, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(10, 10, WIDTH - 20, HEIGHT - 20);
+  worldBackgroundBuffer = buffer;
+  return buffer.canvas;
+}
+
+function drawBackground() {
+  const background = getWorldBackgroundCanvas();
+  if (background) {
+    worldCtx.clearRect(0, 0, WIDTH, HEIGHT);
+    worldCtx.drawImage(background, 0, 0);
+    return;
+  }
+
+  worldCtx.fillStyle = "#041018";
+  worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
 }
 
 function drawFood() {
@@ -8194,19 +8324,45 @@ function drawWorld() {
   drawStartupScene();
 }
 
-function drawTelemetryBackground() {
-  telemetryCtx.clearRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
-  telemetryCtx.fillStyle = "#051019";
-  telemetryCtx.fillRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
-
-  for (let y = 0; y < telemetryCanvas.height; y += 14) {
-    telemetryCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
-    telemetryCtx.fillRect(0, y, telemetryCanvas.width, 1);
+function getTelemetryBackgroundCanvas() {
+  const width = telemetryCanvas.width;
+  const height = telemetryCanvas.height;
+  if (telemetryBackgroundBuffer?.canvas?.width === width && telemetryBackgroundBuffer.canvas.height === height) {
+    return telemetryBackgroundBuffer.canvas;
   }
 
-  for (let x = 0; x < telemetryCanvas.width; x += 18) {
-    telemetryCtx.fillStyle = x % 36 === 0 ? "rgba(102, 220, 255, 0.028)" : "rgba(102, 220, 255, 0.012)";
-    telemetryCtx.fillRect(x, 0, 1, telemetryCanvas.height);
+  const buffer = createBufferCanvas(width, height);
+  const ctx = buffer.ctx;
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "#051019";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let y = 0; y < height; y += 14) {
+    ctx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    ctx.fillRect(0, y, width, 1);
+  }
+
+  for (let x = 0; x < width; x += 18) {
+    ctx.fillStyle = x % 36 === 0 ? "rgba(102, 220, 255, 0.028)" : "rgba(102, 220, 255, 0.012)";
+    ctx.fillRect(x, 0, 1, height);
+  }
+
+  telemetryBackgroundBuffer = buffer;
+  return buffer.canvas;
+}
+
+function drawTelemetryBackground() {
+  const background = getTelemetryBackgroundCanvas();
+  if (background) {
+    telemetryCtx.clearRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
+    telemetryCtx.drawImage(background, 0, 0);
+  } else {
+    telemetryCtx.clearRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
+    telemetryCtx.fillStyle = "#051019";
+    telemetryCtx.fillRect(0, 0, telemetryCanvas.width, telemetryCanvas.height);
   }
 
   const sweepX = (state.tick * 1.6) % (telemetryCanvas.width + 64) - 32;
@@ -8358,15 +8514,42 @@ function drawTelemetryPanel() {
   telemetryCtx.textAlign = "left";
 }
 
+function getNetworkBackgroundCanvas() {
+  const width = networkCanvas.width;
+  const height = networkCanvas.height;
+  if (networkBackgroundBuffer?.canvas?.width === width && networkBackgroundBuffer.canvas.height === height) {
+    return networkBackgroundBuffer.canvas;
+  }
+
+  const buffer = createBufferCanvas(width, height);
+  const ctx = buffer.ctx;
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "#051019";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let y = 0; y < height; y += 14) {
+    ctx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
+    ctx.fillRect(0, y, width, 1);
+  }
+
+  networkBackgroundBuffer = buffer;
+  return buffer.canvas;
+}
+
 function drawNetworkBackground() {
+  const background = getNetworkBackgroundCanvas();
+  if (background) {
+    networkCtx.clearRect(0, 0, networkCanvas.width, networkCanvas.height);
+    networkCtx.drawImage(background, 0, 0);
+    return;
+  }
+
   networkCtx.clearRect(0, 0, networkCanvas.width, networkCanvas.height);
   networkCtx.fillStyle = "#051019";
   networkCtx.fillRect(0, 0, networkCanvas.width, networkCanvas.height);
-
-  for (let y = 0; y < networkCanvas.height; y += 14) {
-    networkCtx.fillStyle = y % 28 === 0 ? "rgba(102, 220, 255, 0.04)" : "rgba(102, 220, 255, 0.015)";
-    networkCtx.fillRect(0, y, networkCanvas.width, 1);
-  }
 }
 
 function createNetworkDisplayState(featured) {
@@ -8453,6 +8636,49 @@ function buildLayerNodes(x, top, bottom, count) {
     nodes.push({ x, y: top + gap * i });
   }
   return nodes;
+}
+
+function getNetworkPanelLayout() {
+  const layoutKey = `${networkCanvas.width}x${networkCanvas.height}:${CONFIG.hiddenLayerSizes.join(",")}`;
+  if (networkPanelLayoutCache.layout && networkPanelLayoutCache.key === layoutKey) {
+    return networkPanelLayoutCache.layout;
+  }
+
+  const layerNodeCounts = [INPUT_LABELS.length, ...CONFIG.hiddenLayerSizes, OUTPUT_LABELS.length];
+  const layerNames = [
+    "INPUTS",
+    ...CONFIG.hiddenLayerSizes.map((_, index) => `H${index + 1}`),
+    "OUTPUTS"
+  ];
+  const xMargin = 128;
+  const usableWidth = networkCanvas.width - xMargin * 2;
+  const layerXs = layerNodeCounts.map((_, index) =>
+    xMargin + (usableWidth * index) / (layerNodeCounts.length - 1)
+  );
+  const layerNodes = layerNodeCounts.map((count, index) => {
+    if (index === 0) {
+      return buildLayerNodes(layerXs[index], 34, networkCanvas.height - 34, count);
+    }
+    if (index === layerNodeCounts.length - 1) {
+      return buildLayerNodes(layerXs[index], 118, networkCanvas.height - 118, count);
+    }
+    return buildLayerNodes(layerXs[index], 58, networkCanvas.height - 58, count);
+  });
+  const hiddenLabels = CONFIG.hiddenLayerSizes.map((size) => Array(size).fill(""));
+  const hiddenColors = CONFIG.hiddenLayerSizes.map((size) => Array(size).fill("#9de7ff"));
+  const layout = {
+    layerNames,
+    layerXs,
+    layerNodes,
+    hiddenLabels,
+    hiddenColors
+  };
+
+  networkPanelLayoutCache = {
+    key: layoutKey,
+    layout
+  };
+  return layout;
 }
 
 function drawConnections(fromNodes, toNodes, weights, glows) {
@@ -8568,7 +8794,7 @@ function renderDetails(featured, displayLayers) {
     `;
   }).join("");
 
-  creatureDetails.innerHTML = `
+  setElementHtml(creatureDetails, `
     <div class="detail-grid">
       <div class="detail-box"><span>CREATURE</span><strong>C-${String(featured.id).padStart(3, "0")}</strong></div>
       <div class="detail-box"><span>AGE</span><strong>${formatAge(featured.age)}</strong></div>
@@ -8612,7 +8838,7 @@ function renderDetails(featured, displayLayers) {
       </div>
       ${memoryMarkup}
     </div>
-  `;
+  `);
 }
 
 function drawNetworkPanel() {
@@ -8630,7 +8856,7 @@ function drawNetworkPanel() {
     networkCtx.fillRect(86, 236, networkCanvas.width - 172, 8);
     networkCtx.fillStyle = "rgba(255, 241, 123, 0.8)";
     networkCtx.fillRect(86, 236, (networkCanvas.width - 172) * progress, 8);
-    creatureDetails.innerHTML = '<p class="placeholder">The habitat is running its boot sequence. Neural tracking will lock onto the longest-living creature when the ecosystem is released.</p>';
+    setElementHtml(creatureDetails, '<p class="placeholder">The habitat is running its boot sequence. Neural tracking will lock onto the longest-living creature when the ecosystem is released.</p>');
     return;
   }
 
@@ -8640,7 +8866,7 @@ function drawNetworkPanel() {
     networkCtx.fillText("NO ACTIVE CREATURE", 110, 190);
     networkCtx.font = CANVAS_FONTS.section;
     networkCtx.fillText("WAITING FOR BIOSIGNAL", 88, 216);
-    creatureDetails.innerHTML = '<p class="placeholder">The habitat is between lineages. A new population will reseed after extinction.</p>';
+    setElementHtml(creatureDetails, '<p class="placeholder">The habitat is between lineages. A new population will reseed after extinction.</p>');
     return;
   }
 
@@ -8649,27 +8875,8 @@ function drawNetworkPanel() {
   const layerValues = displayState.layers;
   const inputs = layerValues[0] || [];
   const outputs = layerValues[layerValues.length - 1] || [];
-  const hiddenLayers = layerValues.slice(1, -1);
-  const layerNodeCounts = [INPUT_LABELS.length, ...CONFIG.hiddenLayerSizes, OUTPUT_LABELS.length];
-  const layerNames = [
-    "INPUTS",
-    ...CONFIG.hiddenLayerSizes.map((_, index) => `H${index + 1}`),
-    "OUTPUTS"
-  ];
-  const xMargin = 128;
-  const usableWidth = networkCanvas.width - xMargin * 2;
-  const layerXs = layerNodeCounts.map((_, index) =>
-    xMargin + (usableWidth * index) / (layerNodeCounts.length - 1)
-  );
-  const layerNodes = layerNodeCounts.map((count, index) => {
-    if (index === 0) {
-      return buildLayerNodes(layerXs[index], 34, networkCanvas.height - 34, count);
-    }
-    if (index === layerNodeCounts.length - 1) {
-      return buildLayerNodes(layerXs[index], 118, networkCanvas.height - 118, count);
-    }
-    return buildLayerNodes(layerXs[index], 58, networkCanvas.height - 58, count);
-  });
+  const layout = getNetworkPanelLayout();
+  const layerNodes = layout.layerNodes;
 
   for (let layerIndex = 0; layerIndex < featured.brain.weights.length; layerIndex += 1) {
     drawConnections(
@@ -8681,12 +8888,12 @@ function drawNetworkPanel() {
   }
 
   drawLayerNodes(layerNodes[0], inputs, INPUT_LABELS, INPUT_COLORS, "outside-left");
-  for (let hiddenIndex = 0; hiddenIndex < hiddenLayers.length; hiddenIndex += 1) {
+  for (let hiddenIndex = 0; hiddenIndex < CONFIG.hiddenLayerSizes.length; hiddenIndex += 1) {
     drawLayerNodes(
       layerNodes[hiddenIndex + 1],
-      hiddenLayers[hiddenIndex],
-      Array(CONFIG.hiddenLayerSizes[hiddenIndex]).fill(""),
-      Array(CONFIG.hiddenLayerSizes[hiddenIndex]).fill("#9de7ff"),
+      layerValues[hiddenIndex + 1] || [],
+      layout.hiddenLabels[hiddenIndex],
+      layout.hiddenColors[hiddenIndex],
       "center"
     );
   }
@@ -8701,16 +8908,56 @@ function drawNetworkPanel() {
   networkCtx.fillStyle = "#ddfaff";
   networkCtx.font = CANVAS_FONTS.section;
   networkCtx.textAlign = "center";
-  for (let i = 0; i < layerNames.length; i += 1) {
-    networkCtx.fillText(layerNames[i], layerXs[i], 20);
+  for (let i = 0; i < layout.layerNames.length; i += 1) {
+    networkCtx.fillText(layout.layerNames[i], layout.layerXs[i], 20);
   }
   networkCtx.textAlign = "left";
 
   renderDetails(featured, layerValues);
 }
 
+function getFamilyTreeBackgroundCanvas(width, height, maxGeneration, familyTreeLeadPadding) {
+  const backgroundKey = `${width}x${height}:${maxGeneration}:${familyTreeLeadPadding}`;
+  if (familyTreeBackgroundBuffer.canvas && familyTreeBackgroundBuffer.key === backgroundKey) {
+    return familyTreeBackgroundBuffer.canvas;
+  }
+
+  const buffer = createBufferCanvas(width, height);
+  const ctx = buffer.ctx;
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.fillStyle = "rgba(2, 8, 13, 0.98)";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let y = 0; y < height; y += 18) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+    ctx.fillRect(0, y, width, 1);
+  }
+
+  for (let generation = 1; generation <= maxGeneration; generation += 1) {
+    const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
+    ctx.fillStyle = "rgba(102, 220, 255, 0.08)";
+    ctx.fillRect(FAMILY_TREE_MARGIN_X - 12, y, width - (FAMILY_TREE_MARGIN_X - 12) * 2, 1);
+    ctx.fillStyle = generation % 2 === 0
+      ? "rgba(255, 241, 123, 0.52)"
+      : "rgba(157, 231, 255, 0.54)";
+    ctx.font = CANVAS_FONTS.compact;
+    ctx.textAlign = "left";
+    ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+  }
+
+  familyTreeBackgroundBuffer = {
+    key: backgroundKey,
+    canvas: buffer.canvas
+  };
+  return buffer.canvas;
+}
+
 function drawFamilyTreePanel() {
-  const nodes = Array.from(state.lineageNodes.values());
+  const layoutData = getLineageLayoutData();
+  const { nodes, nodesByGeneration, sortedNodes, maxGeneration } = layoutData;
   const width = familyTreeCanvas.width;
   let height = FAMILY_TREE_MIN_HEIGHT;
   const stickToBottom = familyTreeScroll
@@ -8718,10 +8965,14 @@ function drawFamilyTreePanel() {
     : false;
 
   if (exportFamilyTreeButton) {
-    exportFamilyTreeButton.disabled = nodes.length === 0;
-    exportFamilyTreeButton.title = nodes.length === 0
+    const exportDisabled = nodes.length === 0;
+    setElementDisabled(exportFamilyTreeButton, exportDisabled);
+    setElementTitle(
+      exportFamilyTreeButton,
+      exportDisabled
       ? "No family tree data is available to export yet."
-      : "Save the full family tree as a PNG image.";
+      : "Save the full family tree as a PNG image."
+    );
   }
 
   if (nodes.length === 0) {
@@ -8741,27 +8992,8 @@ function drawFamilyTreePanel() {
     familyTreeCtx.font = CANVAS_FONTS.body;
     familyTreeCtx.fillText("Founders and offspring will appear here as the habitat runs.", width * 0.5, height * 0.5 + 14);
     familyTreeCtx.textAlign = "left";
-    familyTreeStatus.textContent = "Tracking will begin as soon as the first family line is active.";
+    setElementText(familyTreeStatus, "Tracking will begin as soon as the first family line is active.");
     return;
-  }
-
-  const nodesByGeneration = new Map();
-  let maxGeneration = 1;
-
-  for (let i = 0; i < nodes.length; i += 1) {
-    const node = nodes[i];
-    const generation = Math.max(1, Math.round(node.generation || 1));
-    if (!nodesByGeneration.has(generation)) {
-      nodesByGeneration.set(generation, []);
-    }
-    nodesByGeneration.get(generation).push(node);
-    if (generation > maxGeneration) {
-      maxGeneration = generation;
-    }
-  }
-
-  for (const generationNodes of nodesByGeneration.values()) {
-    generationNodes.sort((a, b) => a.birthOrder - b.birthOrder);
   }
 
   const familyTreeLeadPadding = Math.max(
@@ -8779,13 +9011,14 @@ function drawFamilyTreePanel() {
     familyTreeCtx.imageSmoothingEnabled = false;
   }
 
-  familyTreeCtx.clearRect(0, 0, width, height);
-  familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
-  familyTreeCtx.fillRect(0, 0, width, height);
-
-  for (let y = 0; y < height; y += 18) {
-    familyTreeCtx.fillStyle = "rgba(255, 255, 255, 0.02)";
-    familyTreeCtx.fillRect(0, y, width, 1);
+  const familyTreeBackground = getFamilyTreeBackgroundCanvas(width, height, maxGeneration, familyTreeLeadPadding);
+  if (familyTreeBackground) {
+    familyTreeCtx.clearRect(0, 0, width, height);
+    familyTreeCtx.drawImage(familyTreeBackground, 0, 0);
+  } else {
+    familyTreeCtx.clearRect(0, 0, width, height);
+    familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
+    familyTreeCtx.fillRect(0, 0, width, height);
   }
 
   const positions = new Map();
@@ -8794,15 +9027,6 @@ function drawFamilyTreePanel() {
   for (let generation = 1; generation <= maxGeneration; generation += 1) {
     const generationNodes = nodesByGeneration.get(generation) || [];
     const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
-
-    familyTreeCtx.fillStyle = "rgba(102, 220, 255, 0.08)";
-    familyTreeCtx.fillRect(FAMILY_TREE_MARGIN_X - 12, y, width - (FAMILY_TREE_MARGIN_X - 12) * 2, 1);
-    familyTreeCtx.fillStyle = generation % 2 === 0
-      ? "rgba(255, 241, 123, 0.52)"
-      : "rgba(157, 231, 255, 0.54)";
-    familyTreeCtx.font = CANVAS_FONTS.compact;
-    familyTreeCtx.textAlign = "left";
-    familyTreeCtx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
 
     if (generationNodes.length === 0) {
       continue;
@@ -8822,9 +9046,6 @@ function drawFamilyTreePanel() {
 
   const focusId = getLineageFocusId();
   const trail = getLineageTrailSet(focusId);
-  const sortedNodes = nodes.slice().sort((a, b) =>
-    a.generation - b.generation || a.birthOrder - b.birthOrder
-  );
   const animations = new Map();
 
   for (let i = 0; i < sortedNodes.length; i += 1) {
@@ -9127,26 +9348,30 @@ function drawFamilyTreePanel() {
 
   if (focusId && trail.size > 0) {
     const focusNode = state.lineageNodes.get(focusId);
-    familyTreeStatus.textContent = focusNode
-      ? `Highlight locked on C-${String(focusNode.id).padStart(3, "0")} // ${trail.size} ancestors in the inheritance trail. Scroll to inspect older branches.`
-      : "Live ancestry map active. Scroll to inspect older branches.";
+    setElementText(
+      familyTreeStatus,
+      focusNode
+        ? `Highlight locked on C-${String(focusNode.id).padStart(3, "0")} // ${trail.size} ancestors in the inheritance trail. Scroll to inspect older branches.`
+        : "Live ancestry map active. Scroll to inspect older branches."
+    );
   } else {
-    familyTreeStatus.textContent = "Live ancestry map active. Scroll to inspect older branches.";
+    setElementText(familyTreeStatus, "Live ancestry map active. Scroll to inspect older branches.");
   }
 
   updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom);
 }
 
 function updateStats() {
-  populationStat.textContent = String(getLivingCreaturesCount()).padStart(2, "0");
-  foodStat.textContent = String(state.foods.length).padStart(2, "0");
-  birthStat.textContent = String(state.births).padStart(2, "0");
-  deathStat.textContent = String(state.deaths).padStart(2, "0");
-  oldestStat.textContent = state.featured ? formatAge(state.featured.age) : "--";
-  extinctionStat.textContent = String(state.extinctionCount).padStart(2, "0");
-  runtimeStat.textContent = formatRunTimer(state.tick);
-  lineageStat.textContent = formatRunTimer(state.lineageTick);
-  updateBrainBankUi();
+  const livingCount = getLivingCreaturesCount();
+  setElementText(populationStat, String(livingCount).padStart(2, "0"));
+  setElementText(foodStat, String(state.foods.length).padStart(2, "0"));
+  setElementText(birthStat, String(state.births).padStart(2, "0"));
+  setElementText(deathStat, String(state.deaths).padStart(2, "0"));
+  setElementText(oldestStat, state.featured ? formatAge(state.featured.age) : "--");
+  setElementText(extinctionStat, String(state.extinctionCount).padStart(2, "0"));
+  setElementText(runtimeStat, formatRunTimer(state.tick));
+  setElementText(lineageStat, formatRunTimer(state.lineageTick));
+  updateBrainBankUi(livingCount);
   updateInfluenceToolUi();
 }
 
