@@ -49,6 +49,7 @@ brainBankHabitatCtx.imageSmoothingEnabled = false;
 const WIDTH = worldCanvas.width;
 const HEIGHT = worldCanvas.height;
 const TAU = Math.PI * 2;
+const HABITAT_DIVIDER_HALF_WIDTH = 9;
 const CANVAS_FONTS = Object.freeze({
   hero: "20px Courier New",
   title: "18px Courier New",
@@ -123,6 +124,7 @@ const DEFAULT_CONFIG = {
   mutationRate: 0.14,
   mutationScale: 0.28,
   hiddenLayerSizes: [8, 8, 8],
+  middleWallEnabled: false,
   wallPointGap: 28,
   foodLifetimeFrames: 1800,
   extinctionDelay: 450,
@@ -361,6 +363,13 @@ const CONTROL_DEFS = [
     format: (value) => value.toFixed(1)
   },
   {
+    key: "middleWallEnabled",
+    label: "Center Wall",
+    type: "toggle",
+    note: "Adds a divider down the middle so worms cannot cross between the two halves.",
+    format: (value) => value ? "ON" : "OFF"
+  },
+  {
     key: "soundVolume",
     label: "Sound Volume",
     min: 0,
@@ -371,7 +380,7 @@ const CONTROL_DEFS = [
   }
 ];
 
-const wallSensorPoints = buildWallSensorPoints();
+let wallSensorPoints = buildWallSensorPoints();
 const controlElements = {};
 
 const state = {
@@ -791,12 +800,75 @@ function getStepPrecision(step) {
   return stepString.split(".")[1].length;
 }
 
+function isToggleControl(def) {
+  return def.type === "toggle";
+}
+
 function formatControlValue(def, value) {
   if (def.format) {
     return def.format(value);
   }
+  if (isToggleControl(def)) {
+    return value ? "ON" : "OFF";
+  }
   const precision = getStepPrecision(def.step);
   return precision > 0 ? value.toFixed(precision) : String(Math.round(value));
+}
+
+function getToggleControlCopy(def, value) {
+  if (def.key === "middleWallEnabled") {
+    return value ? "Divider active" : "Open center lane";
+  }
+  return value ? "Enabled" : "Disabled";
+}
+
+function buildControlMarkup(def) {
+  if (isToggleControl(def)) {
+    return `
+      <div class="control-card control-card-toggle">
+        <div class="control-top">
+          <label for="control-${def.key}">${def.label}</label>
+          <strong class="control-value" id="value-${def.key}">${formatControlValue(def, CONFIG[def.key])}</strong>
+        </div>
+        <p class="control-meta">${def.note}</p>
+        <div class="control-toggle-row">
+          <label class="control-switch" for="control-${def.key}">
+            <input
+              id="control-${def.key}"
+              class="control-switch-input"
+              type="checkbox"
+              data-key="${def.key}"
+              ${CONFIG[def.key] ? "checked" : ""}
+            >
+            <span class="control-switch-track" aria-hidden="true">
+              <span class="control-switch-thumb"></span>
+            </span>
+          </label>
+          <span class="control-switch-text" id="toggle-copy-${def.key}">${getToggleControlCopy(def, CONFIG[def.key])}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="control-card">
+      <div class="control-top">
+        <label for="control-${def.key}">${def.label}</label>
+        <strong class="control-value" id="value-${def.key}">${formatControlValue(def, CONFIG[def.key])}</strong>
+      </div>
+      <p class="control-meta">${def.note}</p>
+      <input
+        id="control-${def.key}"
+        class="control-slider"
+        type="range"
+        min="${def.min}"
+        max="${def.max}"
+        step="${def.step}"
+        value="${CONFIG[def.key]}"
+        data-key="${def.key}"
+      >
+    </div>
+  `;
 }
 
 function getMasterVolumeLevel() {
@@ -1085,33 +1157,18 @@ function updateExtinctionAudio() {
 }
 
 function buildControlDeck() {
-  controlDeck.innerHTML = CONTROL_DEFS.map((def) => `
-    <div class="control-card">
-      <div class="control-top">
-        <label for="control-${def.key}">${def.label}</label>
-        <strong class="control-value" id="value-${def.key}">${formatControlValue(def, CONFIG[def.key])}</strong>
-      </div>
-      <p class="control-meta">${def.note}</p>
-      <input
-        id="control-${def.key}"
-        class="control-slider"
-        type="range"
-        min="${def.min}"
-        max="${def.max}"
-        step="${def.step}"
-        value="${CONFIG[def.key]}"
-        data-key="${def.key}"
-      >
-    </div>
-  `).join("");
+  controlDeck.innerHTML = CONTROL_DEFS.map(buildControlMarkup).join("");
 
   for (let i = 0; i < CONTROL_DEFS.length; i += 1) {
     const def = CONTROL_DEFS[i];
     const input = document.getElementById(`control-${def.key}`);
     const value = document.getElementById(`value-${def.key}`);
-    controlElements[def.key] = { input, value, def };
-    input.addEventListener("input", () => {
-      applyControlValue(def, Number(input.value));
+    const toggleText = isToggleControl(def)
+      ? document.getElementById(`toggle-copy-${def.key}`)
+      : null;
+    controlElements[def.key] = { input, value, toggleText, def };
+    input.addEventListener(isToggleControl(def) ? "change" : "input", () => {
+      applyControlValue(def, isToggleControl(def) ? input.checked : Number(input.value));
     });
   }
 }
@@ -1277,7 +1334,14 @@ function updateControlDisplay(key) {
   if (!control) {
     return;
   }
-  control.input.value = String(CONFIG[key]);
+  if (isToggleControl(control.def)) {
+    control.input.checked = Boolean(CONFIG[key]);
+    if (control.toggleText) {
+      control.toggleText.textContent = getToggleControlCopy(control.def, CONFIG[key]);
+    }
+  } else {
+    control.input.value = String(CONFIG[key]);
+  }
   control.value.textContent = formatControlValue(control.def, CONFIG[key]);
 }
 
@@ -1349,15 +1413,39 @@ function syncConfigToWorld(key) {
     clampCreatureSpeeds();
   }
 
+  if (key === "middleWallEnabled") {
+    wallSensorPoints = buildWallSensorPoints();
+    if (CONFIG.middleWallEnabled) {
+      for (let i = 0; i < state.foods.length; i += 1) {
+        const food = state.foods[i];
+        const nextPosition = clampPointInsideHabitat(
+          { x: food.x, y: food.y },
+          food.radius,
+          { side: getHabitatSidePreference(food.x) }
+        );
+        food.x = nextPosition.x;
+        food.y = nextPosition.y;
+      }
+      for (let i = 0; i < state.creatures.length; i += 1) {
+        nudgeCreatureInsideHabitat(state.creatures[i]);
+      }
+    }
+  }
+
   if (key === "soundVolume") {
     updateMasterVolume();
   }
 }
 
 function applyControlValue(def, rawValue) {
-  const precision = getStepPrecision(def.step);
-  const clampedValue = clamp(rawValue, def.min, def.max);
-  const nextValue = Number(clampedValue.toFixed(precision));
+  let nextValue;
+  if (isToggleControl(def)) {
+    nextValue = Boolean(rawValue);
+  } else {
+    const precision = getStepPrecision(def.step);
+    const clampedValue = clamp(rawValue, def.min, def.max);
+    nextValue = Number(clampedValue.toFixed(precision));
+  }
   CONFIG[def.key] = nextValue;
   syncConfigToWorld(def.key);
   updateControlDisplay(def.key);
@@ -1449,13 +1537,179 @@ function buildWallSensorPoints() {
     points.push({ x: 0, y, kind: "wall" });
     points.push({ x: WIDTH, y, kind: "wall" });
   }
+  if (CONFIG.middleWallEnabled) {
+    const { left, centerX, right } = getHabitatDividerBounds();
+    const dividerColumns = [left, centerX, right];
+    for (let columnIndex = 0; columnIndex < dividerColumns.length; columnIndex += 1) {
+      for (let y = 0; y <= HEIGHT; y += CONFIG.wallPointGap) {
+        points.push({ x: dividerColumns[columnIndex], y, kind: "wall" });
+      }
+    }
+  }
   return points;
 }
 
-function randomInteriorPosition(radius) {
+function getHabitatDividerBounds() {
+  const centerX = WIDTH * 0.5;
   return {
-    x: rand(radius + 20, WIDTH - radius - 20),
-    y: rand(radius + 20, HEIGHT - radius - 20)
+    centerX,
+    left: centerX - HABITAT_DIVIDER_HALF_WIDTH,
+    right: centerX + HABITAT_DIVIDER_HALF_WIDTH
+  };
+}
+
+function getHabitatSidePreference(x, fallbackX = x, velocityX = 0) {
+  const centerX = WIDTH * 0.5;
+  if (x < centerX) {
+    return -1;
+  }
+  if (x > centerX) {
+    return 1;
+  }
+  if (fallbackX < centerX) {
+    return -1;
+  }
+  if (fallbackX > centerX) {
+    return 1;
+  }
+  return velocityX < 0 ? -1 : 1;
+}
+
+function clampPointInsideHabitat(point, radius, options = {}) {
+  const padding = options.padding ?? 0;
+  const clearance = radius + padding;
+  const clampedPoint = {
+    x: clamp(point.x, clearance, WIDTH - clearance),
+    y: clamp(point.y, clearance, HEIGHT - clearance)
+  };
+
+  if (!CONFIG.middleWallEnabled) {
+    return clampedPoint;
+  }
+
+  const divider = getHabitatDividerBounds();
+  if (clampedPoint.x + clearance <= divider.left || clampedPoint.x - clearance >= divider.right) {
+    return clampedPoint;
+  }
+
+  const side = options.side ?? getHabitatSidePreference(
+    clampedPoint.x,
+    options.fallbackX ?? clampedPoint.x,
+    options.velocityX ?? 0
+  );
+  clampedPoint.x = side < 0
+    ? divider.left - clearance
+    : divider.right + clearance;
+  return clampedPoint;
+}
+
+function getBodyBoundaryPush(body, creature = body.creature) {
+  const minX = body.radius;
+  const maxX = WIDTH - body.radius;
+  const minY = body.radius;
+  const maxY = HEIGHT - body.radius;
+  let pushX = 0;
+  let pushY = 0;
+
+  if (body.x < minX) {
+    pushX += minX - body.x;
+  } else if (body.x > maxX) {
+    pushX += maxX - body.x;
+  }
+
+  if (body.y < minY) {
+    pushY += minY - body.y;
+  } else if (body.y > maxY) {
+    pushY += maxY - body.y;
+  }
+
+  if (CONFIG.middleWallEnabled) {
+    const divider = getHabitatDividerBounds();
+    if (body.x + body.radius > divider.left && body.x - body.radius < divider.right) {
+      const velocityX = body.type === "head"
+        ? creature?.vx ?? 0
+        : body.segmentState?.vx ?? creature?.vx ?? 0;
+      const side = getHabitatSidePreference(body.x, creature?.x ?? body.x, velocityX);
+      const targetX = side < 0
+        ? divider.left - body.radius
+        : divider.right + body.radius;
+      pushX += targetX - body.x;
+    }
+  }
+
+  return { pushX, pushY };
+}
+
+function nudgeCreatureInsideHabitat(creature) {
+  if (creature.lifeStage === "egg") {
+    const nextPosition = clampPointInsideHabitat(
+      { x: creature.x, y: creature.y },
+      creature.radius,
+      {
+        side: getHabitatSidePreference(creature.x, creature.x, creature.vx),
+        velocityX: creature.vx
+      }
+    );
+    creature.x = nextPosition.x;
+    creature.y = nextPosition.y;
+    return;
+  }
+
+  const bodyMetrics = getCreatureBodyMetrics(creature);
+  const bodies = buildCreatureCollisionBodies(creature, bodyMetrics);
+  let shifted = false;
+
+  for (let i = 0; i < bodies.length; i += 1) {
+    const body = bodies[i];
+    const { pushX, pushY } = getBodyBoundaryPush(body, creature);
+    if (pushX === 0 && pushY === 0) {
+      continue;
+    }
+
+    shifted = true;
+    if (body.type === "head") {
+      body.x += pushX;
+      body.y += pushY;
+      creature.x += pushX;
+      creature.y += pushY;
+      continue;
+    }
+
+    if (!body.segmentState) {
+      continue;
+    }
+
+    body.x += pushX;
+    body.y += pushY;
+    body.segmentState.x += pushX;
+    body.segmentState.y += pushY;
+  }
+
+  if (shifted) {
+    creature.vx *= 0.68;
+    creature.vy *= 0.68;
+    relaxCreatureSegments(creature, 1);
+  }
+}
+
+function randomInteriorPosition(radius) {
+  const inset = radius + 20;
+  if (CONFIG.middleWallEnabled) {
+    const divider = getHabitatDividerBounds();
+    const lanes = [
+      { min: inset, max: divider.left - inset },
+      { min: divider.right + inset, max: WIDTH - inset }
+    ].filter((lane) => lane.max >= lane.min);
+    const lane = lanes[Math.floor(Math.random() * lanes.length)] || { min: inset, max: WIDTH - inset };
+    return {
+      x: rand(lane.min, lane.max),
+      y: rand(inset, HEIGHT - inset)
+    };
+  }
+
+  return {
+    x: rand(inset, WIDTH - inset),
+    y: rand(inset, HEIGHT - inset)
   };
 }
 
@@ -3249,17 +3503,23 @@ function createCreature(parent = null, options = {}) {
   if (Number.isFinite(options.idOverride)) {
     state.nextCreatureId = Math.max(state.nextCreatureId, options.idOverride + 1);
   }
-  const position = options.positionOverride
+  const unclampedPosition = options.positionOverride
     ? {
-        x: clamp(options.positionOverride.x, radius + 2, WIDTH - radius - 2),
-        y: clamp(options.positionOverride.y, radius + 2, HEIGHT - radius - 2)
+        x: options.positionOverride.x,
+        y: options.positionOverride.y
       }
     : parent
       ? {
-          x: clamp(parent.x + rand(-18, 18), radius + 2, WIDTH - radius - 2),
-          y: clamp(parent.y + rand(-18, 18), radius + 2, HEIGHT - radius - 2)
+          x: parent.x + rand(-18, 18),
+          y: parent.y + rand(-18, 18)
         }
       : randomInteriorPosition(radius);
+  const position = clampPointInsideHabitat(unclampedPosition, radius, {
+    padding: 2,
+    side: parent ? getHabitatSidePreference(parent.x, parent.x, parent.vx) : undefined,
+    fallbackX: parent?.x ?? unclampedPosition.x,
+    velocityX: options.velocityOverride?.vx ?? parent?.vx ?? 0
+  });
 
   const hue = options.hueOverride !== undefined
     ? normalizeHueValue(options.hueOverride)
@@ -3892,24 +4152,7 @@ function resolveCreatureWallCollisions(creature) {
 
   for (let i = 0; i < bodies.length; i += 1) {
     const body = bodies[i];
-    const minX = body.radius;
-    const maxX = WIDTH - body.radius;
-    const minY = body.radius;
-    const maxY = HEIGHT - body.radius;
-    let pushX = 0;
-    let pushY = 0;
-
-    if (body.x < minX) {
-      pushX = minX - body.x;
-    } else if (body.x > maxX) {
-      pushX = maxX - body.x;
-    }
-
-    if (body.y < minY) {
-      pushY = minY - body.y;
-    } else if (body.y > maxY) {
-      pushY = maxY - body.y;
-    }
+    const { pushX, pushY } = getBodyBoundaryPush(body, creature);
 
     if (pushX === 0 && pushY === 0) {
       continue;
@@ -3996,8 +4239,19 @@ function updateEgg(creature) {
   creature.displayTurnVelocity = damp(creature.displayTurnVelocity, 0, 0.18);
   creature.vx *= 0.7;
   creature.vy *= 0.7;
-  creature.x = clamp(creature.x + creature.vx * 0.18, creature.radius, WIDTH - creature.radius);
-  creature.y = clamp(creature.y + creature.vy * 0.18, creature.radius, HEIGHT - creature.radius);
+  const nextPosition = clampPointInsideHabitat(
+    {
+      x: creature.x + creature.vx * 0.18,
+      y: creature.y + creature.vy * 0.18
+    },
+    creature.radius,
+    {
+      side: getHabitatSidePreference(creature.x, creature.x, creature.vx),
+      velocityX: creature.vx
+    }
+  );
+  creature.x = nextPosition.x;
+  creature.y = nextPosition.y;
   creature.recentAction = "EGG";
 
   if (creature.eggTimer <= 0) {
@@ -4969,8 +5223,16 @@ function applyInfluenceField() {
     const distance = Math.max(0.001, Math.sqrt(distSq));
     const strength = smooth01(1 - distance / radius);
     const pull = 0.06 + strength * INFLUENCE_TOOL_DEFAULTS.foodPull;
-    food.x = clamp(lerp(food.x, centerX, pull), food.radius, WIDTH - food.radius);
-    food.y = clamp(lerp(food.y, centerY, pull), food.radius, HEIGHT - food.radius);
+    const nextFoodPosition = clampPointInsideHabitat(
+      {
+        x: lerp(food.x, centerX, pull),
+        y: lerp(food.y, centerY, pull)
+      },
+      food.radius,
+      { side: getHabitatSidePreference(food.x, food.x, dx) }
+    );
+    food.x = nextFoodPosition.x;
+    food.y = nextFoodPosition.y;
   }
 
   for (let i = 0; i < state.creatures.length; i += 1) {
@@ -5034,8 +5296,16 @@ function applyInfluenceField() {
       relaxCreatureSegments(creature, 1);
       resolveCreatureWallCollisions(creature);
     } else {
-      creature.x = clamp(creature.x, creature.radius, WIDTH - creature.radius);
-      creature.y = clamp(creature.y, creature.radius, HEIGHT - creature.radius);
+      const nextEggPosition = clampPointInsideHabitat(
+        { x: creature.x, y: creature.y },
+        creature.radius,
+        {
+          side: getHabitatSidePreference(creature.x, creature.x, creature.vx),
+          velocityX: creature.vx
+        }
+      );
+      creature.x = nextEggPosition.x;
+      creature.y = nextEggPosition.y;
     }
   }
 }
@@ -7451,11 +7721,49 @@ function drawBackground() {
   if (background) {
     worldCtx.clearRect(0, 0, WIDTH, HEIGHT);
     worldCtx.drawImage(background, 0, 0);
+  } else {
+    worldCtx.fillStyle = "#041018";
+    worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+
+  drawHabitatDivider();
+}
+
+function drawHabitatDivider() {
+  if (!CONFIG.middleWallEnabled) {
     return;
   }
 
-  worldCtx.fillStyle = "#041018";
-  worldCtx.fillRect(0, 0, WIDTH, HEIGHT);
+  const { left, centerX, right } = getHabitatDividerBounds();
+  const top = 12;
+  const height = HEIGHT - 24;
+  worldCtx.save();
+  worldCtx.fillStyle = "rgba(5, 16, 24, 0.88)";
+  worldCtx.fillRect(left, top, right - left, height);
+
+  for (let y = top + 10; y < HEIGHT - top - 6; y += 18) {
+    worldCtx.fillStyle = y % 36 === 0
+      ? "rgba(255, 241, 123, 0.26)"
+      : "rgba(102, 220, 255, 0.22)";
+    worldCtx.fillRect(left + 2, y, Math.max(1, right - left - 4), 2);
+  }
+
+  worldCtx.strokeStyle = "rgba(102, 220, 255, 0.48)";
+  worldCtx.lineWidth = 2;
+  worldCtx.beginPath();
+  worldCtx.moveTo(left + 0.5, top);
+  worldCtx.lineTo(left + 0.5, HEIGHT - top);
+  worldCtx.moveTo(right - 0.5, top);
+  worldCtx.lineTo(right - 0.5, HEIGHT - top);
+  worldCtx.stroke();
+
+  worldCtx.strokeStyle = "rgba(255, 241, 123, 0.18)";
+  worldCtx.lineWidth = 1;
+  worldCtx.beginPath();
+  worldCtx.moveTo(centerX + 0.5, top + 6);
+  worldCtx.lineTo(centerX + 0.5, HEIGHT - top - 6);
+  worldCtx.stroke();
+  worldCtx.restore();
 }
 
 function drawFood() {
