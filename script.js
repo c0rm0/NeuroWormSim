@@ -212,6 +212,8 @@ const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_N
 const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
 const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
+const FAMILY_TREE_LAYOUT_FOLLOW = 0.24;
+const FAMILY_TREE_LAYOUT_SNAP_DISTANCE = 0.35;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS = 5000;
 const FAMILY_TREE_MANUAL_SCROLL_INTENT_MS = 850;
@@ -415,6 +417,7 @@ const state = {
   telemetryHistory: [],
   telemetrySampleClock: 0,
   lineageNodes: new Map(),
+  lineageDisplayPositions: new Map(),
   lineageBirthOrder: 0,
   influenceTool: {
     pointerActive: false,
@@ -1563,6 +1566,7 @@ function resetTelemetryHistory() {
 
 function resetLineageTree() {
   state.lineageNodes = new Map();
+  state.lineageDisplayPositions = new Map();
   state.lineageBirthOrder = 0;
 }
 
@@ -1807,6 +1811,36 @@ function getDeepestLivingLineageNode(sortedNodes) {
   }
 
   return deepestLivingNode;
+}
+
+function getFamilyTreeRenderPositions(targetPositions) {
+  const renderPositions = state.lineageDisplayPositions;
+
+  for (const id of Array.from(renderPositions.keys())) {
+    if (!targetPositions.has(id)) {
+      renderPositions.delete(id);
+    }
+  }
+
+  for (const [id, target] of targetPositions.entries()) {
+    const current = renderPositions.get(id);
+    if (!current) {
+      renderPositions.set(id, {
+        x: target.x,
+        y: target.y
+      });
+      continue;
+    }
+
+    current.x = Math.abs(target.x - current.x) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
+      ? target.x
+      : damp(current.x, target.x, FAMILY_TREE_LAYOUT_FOLLOW);
+    current.y = Math.abs(target.y - current.y) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
+      ? target.y
+      : damp(current.y, target.y, FAMILY_TREE_LAYOUT_FOLLOW);
+  }
+
+  return renderPositions;
 }
 
 function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom) {
@@ -8691,6 +8725,7 @@ function drawFamilyTreePanel() {
   }
 
   if (nodes.length === 0) {
+    state.lineageDisplayPositions.clear();
     if (familyTreeCanvas.height !== height) {
       familyTreeCanvas.height = height;
       familyTreeCtx.imageSmoothingEnabled = false;
@@ -8783,6 +8818,8 @@ function drawFamilyTreePanel() {
     }
   }
 
+  const renderPositions = getFamilyTreeRenderPositions(positions);
+
   const focusId = getLineageFocusId();
   const trail = getLineageTrailSet(focusId);
   const sortedNodes = nodes.slice().sort((a, b) =>
@@ -8824,8 +8861,8 @@ function drawFamilyTreePanel() {
     }
 
     const parentNode = state.lineageNodes.get(node.parentId);
-    const parentPos = positions.get(node.parentId);
-    const childPos = positions.get(node.id);
+    const parentPos = renderPositions.get(node.parentId);
+    const childPos = renderPositions.get(node.id);
     if (!parentPos || !childPos) {
       continue;
     }
@@ -8924,7 +8961,7 @@ function drawFamilyTreePanel() {
 
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
-    const position = positions.get(node.id);
+    const position = renderPositions.get(node.id);
     if (!position) {
       continue;
     }
