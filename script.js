@@ -6,6 +6,7 @@ const networkCanvas = document.getElementById("networkCanvas");
 const networkCtx = networkCanvas.getContext("2d");
 const familyTreeCanvas = document.getElementById("familyTreeCanvas");
 const familyTreeCtx = familyTreeCanvas.getContext("2d");
+const familyTreePanel = familyTreeCanvas?.closest(".family-tree-panel") || null;
 
 const populationStat = document.getElementById("populationStat");
 const foodStat = document.getElementById("foodStat");
@@ -19,6 +20,12 @@ const creatureDetails = document.getElementById("creatureDetails");
 const familyTreeScroll = document.getElementById("familyTreeScroll");
 const familyTreeStatus = document.getElementById("familyTreeStatus");
 const exportFamilyTreeButton = document.getElementById("exportFamilyTreeButton");
+const familyTreeSpacer = familyTreeScroll ? document.createElement("div") : null;
+if (familyTreeSpacer) {
+  familyTreeSpacer.className = "family-tree-spacer";
+  familyTreeSpacer.setAttribute("aria-hidden", "true");
+  familyTreeScroll.appendChild(familyTreeSpacer);
+}
 const controlDeck = document.getElementById("controlDeck");
 const collapsibleDataPanels = Array.from(document.querySelectorAll("[data-collapsible-panel]"));
 const resetControlsButton = document.getElementById("resetControlsButton");
@@ -221,18 +228,21 @@ const FAMILY_TREE_MARGIN_X = 58;
 const FAMILY_TREE_TOP_PADDING = 34;
 const FAMILY_TREE_BOTTOM_PADDING = 30;
 const FAMILY_TREE_ROW_CENTER_OFFSET = 12;
-const FAMILY_TREE_LINK_DRAW_FRAMES = 60;
-const FAMILY_TREE_NODE_FLASH_FRAMES = 22;
-const FAMILY_TREE_DEATH_WINK_FRAMES = 20;
-const FAMILY_TREE_LIVING_LINK_UNDRAW_FRAMES = 28;
+const FAMILY_TREE_LINK_DRAW_FRAMES = 120;
+const FAMILY_TREE_NODE_FLASH_FRAMES = 44;
+const FAMILY_TREE_DEATH_WINK_FRAMES = 40;
+const FAMILY_TREE_LIVING_LINK_UNDRAW_FRAMES = 56;
 const FAMILY_TREE_CONNECTOR_SAMPLES = 28;
-const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_NODE_FLASH_FRAMES + 18;
+const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_NODE_FLASH_FRAMES + 36;
 const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
+const FAMILY_TREE_VIEW_OVERSCAN = FAMILY_TREE_ROW_GAP * 1.5;
 const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
 const FAMILY_TREE_LAYOUT_FOLLOW = 0.24;
 const FAMILY_TREE_LAYOUT_SNAP_DISTANCE = 0.35;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
+const FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS = 70;
+const FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS = 350;
 const FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS = 5000;
 const FAMILY_TREE_MANUAL_SCROLL_INTENT_MS = 850;
 const FAMILY_TREE_SCROLL_SUPPRESS_MS = 140;
@@ -475,6 +485,16 @@ let familyTreeAutoScrollSuppressUntil = 0;
 let familyTreeManualScrollIntentUntil = 0;
 let familyTreeExpectedScrollTop = null;
 let familyTreeExpectedScrollUntil = 0;
+let familyTreeRenderState = {
+  force: true,
+  animationUntilTick: -1,
+  lastRenderMs: -Infinity,
+  lastFocusId: null,
+  lastStructureVersion: -1,
+  lastHadNodes: false,
+  lastPanelCollapsed: false
+};
+let familyTreeVirtualHeight = FAMILY_TREE_MIN_HEIGHT;
 let worldBackgroundBuffer = null;
 let telemetryBackgroundBuffer = null;
 let networkBackgroundBuffer = null;
@@ -2068,6 +2088,28 @@ function resetLineageTree() {
   state.lineageStructureVersion = 0;
   state.lineageLayoutCache = null;
   state.lineageBirthOrder = 0;
+  familyTreeVirtualHeight = FAMILY_TREE_MIN_HEIGHT;
+  if (familyTreeSpacer) {
+    familyTreeSpacer.style.height = "0px";
+  }
+  familyTreeRenderState.force = true;
+  familyTreeRenderState.animationUntilTick = -1;
+  familyTreeRenderState.lastRenderMs = -Infinity;
+  familyTreeRenderState.lastFocusId = null;
+  familyTreeRenderState.lastStructureVersion = -1;
+  familyTreeRenderState.lastHadNodes = false;
+}
+
+function invalidateFamilyTreeRender(animationFrames = 0, force = true) {
+  if (force) {
+    familyTreeRenderState.force = true;
+  }
+  if (animationFrames > 0) {
+    familyTreeRenderState.animationUntilTick = Math.max(
+      familyTreeRenderState.animationUntilTick,
+      state.tick + animationFrames
+    );
+  }
 }
 
 function resolveLineageParentId(parentId) {
@@ -2104,6 +2146,9 @@ function registerLineageCreature(creature, parentId = null) {
     node.childIds = Array.isArray(node.childIds) ? node.childIds : [];
     node.pendingBirth = false;
     layoutChanged = node.generation !== previousGeneration;
+    if (layoutChanged) {
+      invalidateFamilyTreeRender(FAMILY_TREE_ACTIVITY_WINDOW);
+    }
   } else {
     node = {
       id: creature.id,
@@ -2125,6 +2170,7 @@ function registerLineageCreature(creature, parentId = null) {
 
     state.lineageNodes.set(node.id, node);
     layoutChanged = true;
+    invalidateFamilyTreeRender(FAMILY_TREE_ACTIVITY_WINDOW);
   }
 
   if (parentNode && !parentNode.childIds.includes(node.id)) {
@@ -2170,6 +2216,7 @@ function registerLineagePreviewNode(descriptor, parentId = null) {
 
     state.lineageNodes.set(node.id, node);
     invalidateLineageLayoutCache();
+    invalidateFamilyTreeRender(FAMILY_TREE_ACTIVITY_WINDOW);
   }
 
   if (parentNode && !parentNode.childIds.includes(node.id)) {
@@ -2207,6 +2254,7 @@ function updateLineageCreatureNode(creature) {
   }
   if (node.generation !== previousGeneration) {
     invalidateLineageLayoutCache();
+    invalidateFamilyTreeRender(FAMILY_TREE_ACTIVITY_WINDOW);
   }
 }
 
@@ -2418,18 +2466,19 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
     && deepestLivingNode.generation === deepestNode.generation
   );
   const targetNode = deepestLivingNode || deepestNode || getFamilyTreeActivityNode(sortedNodes, animations)?.node || null;
-  const scrollLimit = Math.max(0, familyTreeScroll.scrollHeight - familyTreeScroll.clientHeight);
+  const displayScale = getFamilyTreeCanvasDisplayScale();
+  const viewportHeight = getFamilyTreeViewportHeight(displayScale);
+  const scrollLimit = Math.max(
+    0,
+    Math.round(Math.max(0, familyTreeVirtualHeight - viewportHeight) * displayScale)
+  );
   if (scrollLimit <= 0) {
     setFamilyTreeProgrammaticScrollTop(0);
     return;
   }
 
   const bottomRevealThreshold = familyTreeScroll.clientHeight - FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN;
-  const canvasDisplayHeight = familyTreeCanvas
-    ? Math.max(1, familyTreeCanvas.getBoundingClientRect().height || familyTreeCanvas.clientHeight || familyTreeCanvas.height || 1)
-    : 1;
-  const canvasDisplayScale = canvasDisplayHeight / Math.max(1, familyTreeCanvas?.height || 1);
-  const toScrollY = (canvasY) => canvasY * canvasDisplayScale;
+  const toScrollY = (canvasY) => canvasY * displayScale;
   let targetScrollTop = null;
   if (latestGenerationHasLiving) {
     targetScrollTop = scrollLimit;
@@ -2526,12 +2575,16 @@ function handleFamilyTreeScroll() {
     && now <= familyTreeExpectedScrollUntil
     && Math.abs(familyTreeScroll.scrollTop - familyTreeExpectedScrollTop) <= 1.25;
   if (expectedProgrammaticScroll) {
+    invalidateFamilyTreeRender(0, true);
+    familyTreeRenderState.lastRenderMs = -Infinity;
     return;
   }
   if (now > familyTreeExpectedScrollUntil) {
     familyTreeExpectedScrollTop = null;
   }
   pauseFamilyTreeAutoScroll();
+  invalidateFamilyTreeRender(0, true);
+  familyTreeRenderState.lastRenderMs = -Infinity;
 }
 
 function buildFamilyTreeExportFileName() {
@@ -2582,10 +2635,19 @@ function exportFamilyTreePng() {
     return;
   }
 
-  drawFamilyTreePanel();
+  const sourceBuffer = createBufferCanvas(familyTreeCanvas.width, familyTreeCanvas.height);
+  if (!sourceBuffer.ctx) {
+    return;
+  }
 
-  const sourceWidth = familyTreeCanvas.width;
-  const sourceHeight = familyTreeCanvas.height;
+  drawFamilyTreePanel({
+    fullRender: true,
+    canvas: sourceBuffer.canvas,
+    ctx: sourceBuffer.ctx
+  });
+
+  const sourceWidth = sourceBuffer.canvas.width;
+  const sourceHeight = sourceBuffer.canvas.height;
   if (sourceWidth <= 0 || sourceHeight <= 0) {
     return;
   }
@@ -2610,7 +2672,7 @@ function exportFamilyTreePng() {
     exportCtx.imageSmoothingQuality = downscaling ? "high" : "medium";
   }
   exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-  exportCtx.drawImage(familyTreeCanvas, 0, 0, exportWidth, exportHeight);
+  exportCtx.drawImage(sourceBuffer.canvas, 0, 0, exportWidth, exportHeight);
 
   triggerCanvasPngDownload(exportCanvas, buildFamilyTreeExportFileName());
 }
@@ -4477,6 +4539,7 @@ function killCreature(creature) {
     lineageNode.age = creature.age;
     lineageNode.recentAction = creature.recentAction;
   }
+  invalidateFamilyTreeRender(FAMILY_TREE_DEATH_WINK_FRAMES + FAMILY_TREE_LINK_DRAW_FRAMES);
   recordArchive(creature);
   if (wasLastLiving) {
     state.extinctionSpecimen = cloneExtinctionSpecimen(creature);
@@ -9571,10 +9634,117 @@ function createFamilyTreeGradient(ctx, startNode, endNode, startX, startY, endX,
   return gradient;
 }
 
-function drawFamilyTreePanel() {
+function drawFamilyTreeBackground(ctx, width, height, maxGeneration, familyTreeLeadPadding, viewTop = 0) {
+  const viewBottom = viewTop + height;
+  ctx.fillStyle = "rgba(2, 8, 13, 0.98)";
+  ctx.fillRect(0, 0, width, height);
+
+  const stripeStart = Math.floor(viewTop / 18) * 18;
+  for (let worldY = stripeStart; worldY < viewBottom; worldY += 18) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+    ctx.fillRect(0, Math.round(worldY - viewTop), width, 1);
+  }
+
+  const firstGeneration = Math.max(
+    1,
+    Math.floor((viewTop - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET - FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
+  );
+  const lastGeneration = Math.min(
+    maxGeneration,
+    Math.ceil((viewBottom - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET + FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
+  );
+
+  for (let generation = firstGeneration; generation <= lastGeneration; generation += 1) {
+    const worldY = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
+    const y = Math.round(worldY - viewTop);
+    ctx.fillStyle = "rgba(102, 220, 255, 0.08)";
+    ctx.fillRect(FAMILY_TREE_MARGIN_X - 12, y, width - (FAMILY_TREE_MARGIN_X - 12) * 2, 1);
+    ctx.fillStyle = generation % 2 === 0
+      ? "rgba(255, 241, 123, 0.52)"
+      : "rgba(157, 231, 255, 0.54)";
+    ctx.font = CANVAS_FONTS.compact;
+    ctx.textAlign = "left";
+    ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+  }
+}
+
+function getFamilyTreeCanvasDisplayScale(canvas = familyTreeCanvas) {
+  if (!canvas) {
+    return 1;
+  }
+  const internalWidth = Math.max(1, canvas.width || 1);
+  const displayWidth = Math.max(1, canvas.clientWidth || familyTreeScroll?.clientWidth || internalWidth);
+  return displayWidth / internalWidth;
+}
+
+function getFamilyTreeViewportHeight(displayScale = getFamilyTreeCanvasDisplayScale()) {
+  const safeScale = Number.isFinite(displayScale) && displayScale > 0
+    ? displayScale
+    : 1;
+  return Math.max(1, Math.round((familyTreeScroll?.clientHeight || FAMILY_TREE_MIN_HEIGHT) / safeScale));
+}
+
+function shouldRenderFamilyTreePanel(fullRender = false) {
+  if (fullRender) {
+    return true;
+  }
+
+  const collapsed = familyTreePanel?.classList.contains("is-collapsed") || false;
+  if (collapsed) {
+    familyTreeRenderState.lastPanelCollapsed = true;
+    return false;
+  }
+
+  const focusId = getLineageFocusId();
+  const hasNodes = state.lineageNodes.size > 0;
+  const panelExpanded = familyTreeRenderState.lastPanelCollapsed;
+  const structureDirty = familyTreeRenderState.lastStructureVersion !== state.lineageStructureVersion;
+  const focusDirty = familyTreeRenderState.lastFocusId !== focusId;
+  const nodePresenceDirty = familyTreeRenderState.lastHadNodes !== hasNodes;
+  const animationActive = state.tick <= familyTreeRenderState.animationUntilTick;
+  const timeSinceLastRender = getNowMs() - familyTreeRenderState.lastRenderMs;
+  const renderInterval = animationActive
+    ? FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS
+    : FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS;
+  const canRenderNow = timeSinceLastRender >= renderInterval;
+
+  if (panelExpanded || familyTreeRenderState.lastRenderMs === -Infinity) {
+    return true;
+  }
+
+  return (
+    familyTreeRenderState.force
+    || structureDirty
+    || focusDirty
+    || nodePresenceDirty
+    || animationActive
+  ) && canRenderNow;
+}
+
+function commitFamilyTreeRenderState(focusId, hasNodes) {
+  familyTreeRenderState.force = false;
+  familyTreeRenderState.lastRenderMs = getNowMs();
+  familyTreeRenderState.lastFocusId = focusId;
+  familyTreeRenderState.lastStructureVersion = state.lineageStructureVersion;
+  familyTreeRenderState.lastHadNodes = hasNodes;
+  familyTreeRenderState.lastPanelCollapsed = false;
+}
+
+function drawFamilyTreePanel(options = {}) {
+  const fullRender = options.fullRender === true;
+  const targetCanvas = options.canvas || familyTreeCanvas;
+  const targetCtx = options.ctx || familyTreeCtx;
+  const runtimeTarget = targetCanvas === familyTreeCanvas && targetCtx === familyTreeCtx;
+  if (runtimeTarget && !shouldRenderFamilyTreePanel(fullRender)) {
+    return;
+  }
+
+  const focusId = getLineageFocusId();
   const layoutData = getLineageLayoutData();
   const { nodes, nodesByGeneration, sortedNodes, maxGeneration } = layoutData;
-  const width = familyTreeCanvas.width;
+  const width = targetCanvas.width;
+  const ctx = targetCtx;
+  const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
   let height = FAMILY_TREE_MIN_HEIGHT;
   const stickToBottom = familyTreeScroll
     ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
@@ -9593,49 +9763,67 @@ function drawFamilyTreePanel() {
 
   if (nodes.length === 0) {
     state.lineageDisplayPositions.clear();
-    if (familyTreeCanvas.height !== height) {
-      familyTreeCanvas.height = height;
-      familyTreeCtx.imageSmoothingEnabled = false;
+    if (runtimeTarget) {
+      height = getFamilyTreeViewportHeight(displayScale);
+      familyTreeVirtualHeight = height;
+      if (familyTreeSpacer) {
+        familyTreeSpacer.style.height = "0px";
+      }
     }
-    familyTreeCtx.clearRect(0, 0, width, height);
-    familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
-    familyTreeCtx.fillRect(0, 0, width, height);
-    familyTreeCtx.fillStyle = "#ddfaff";
-    familyTreeCtx.font = CANVAS_FONTS.section;
-    familyTreeCtx.textAlign = "center";
-    familyTreeCtx.fillText("LINEAGE MAP WAITING", width * 0.5, height * 0.5 - 10);
-    familyTreeCtx.fillStyle = "#8bbfca";
-    familyTreeCtx.font = CANVAS_FONTS.body;
-    familyTreeCtx.fillText("Founders and offspring will appear here as the habitat runs.", width * 0.5, height * 0.5 + 14);
-    familyTreeCtx.textAlign = "left";
+    if (targetCanvas.height !== height) {
+      targetCanvas.height = height;
+      targetCtx.imageSmoothingEnabled = false;
+    }
+    targetCtx.clearRect(0, 0, width, height);
+    targetCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
+    targetCtx.fillRect(0, 0, width, height);
+    targetCtx.fillStyle = "#ddfaff";
+    targetCtx.font = CANVAS_FONTS.section;
+    targetCtx.textAlign = "center";
+    targetCtx.fillText("LINEAGE MAP WAITING", width * 0.5, height * 0.5 - 10);
+    targetCtx.fillStyle = "#8bbfca";
+    targetCtx.font = CANVAS_FONTS.body;
+    targetCtx.fillText("Founders and offspring will appear here as the habitat runs.", width * 0.5, height * 0.5 + 14);
+    targetCtx.textAlign = "left";
     setElementText(familyTreeStatus, "Tracking will begin as soon as the first family line is active.");
+    if (runtimeTarget) {
+      commitFamilyTreeRenderState(focusId, false);
+    }
     return;
   }
 
   const familyTreeLeadPadding = Math.max(
     FAMILY_TREE_TOP_PADDING,
-    (familyTreeScroll?.clientHeight || FAMILY_TREE_MIN_HEIGHT)
+    getFamilyTreeViewportHeight(displayScale)
       - FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN
       - FAMILY_TREE_ROW_CENTER_OFFSET
   );
-  height = Math.max(
+  const totalHeight = Math.max(
     FAMILY_TREE_MIN_HEIGHT,
     familyTreeLeadPadding + maxGeneration * FAMILY_TREE_ROW_GAP + FAMILY_TREE_BOTTOM_PADDING
   );
-  if (familyTreeCanvas.height !== height) {
-    familyTreeCanvas.height = height;
-    familyTreeCtx.imageSmoothingEnabled = false;
+  let viewTop = 0;
+  if (runtimeTarget && !fullRender) {
+    height = getFamilyTreeViewportHeight(displayScale);
+    familyTreeVirtualHeight = totalHeight;
+    if (familyTreeSpacer) {
+      familyTreeSpacer.style.height = `${Math.max(0, (totalHeight - height) * displayScale)}px`;
+    }
+    viewTop = clamp(
+      (familyTreeScroll?.scrollTop || 0) / displayScale,
+      0,
+      Math.max(0, totalHeight - height)
+    );
+  } else {
+    height = totalHeight;
+  }
+  if (targetCanvas.height !== height) {
+    targetCanvas.height = height;
+    targetCtx.imageSmoothingEnabled = false;
   }
 
-  const familyTreeBackground = getFamilyTreeBackgroundCanvas(width, height, maxGeneration, familyTreeLeadPadding);
-  if (familyTreeBackground) {
-    familyTreeCtx.clearRect(0, 0, width, height);
-    familyTreeCtx.drawImage(familyTreeBackground, 0, 0);
-  } else {
-    familyTreeCtx.clearRect(0, 0, width, height);
-    familyTreeCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
-    familyTreeCtx.fillRect(0, 0, width, height);
-  }
+  targetCtx.clearRect(0, 0, width, height);
+  drawFamilyTreeBackground(targetCtx, width, height, maxGeneration, familyTreeLeadPadding, viewTop);
 
   const positions = new Map();
   const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
@@ -9660,7 +9848,6 @@ function drawFamilyTreePanel() {
 
   const renderPositions = getFamilyTreeRenderPositions(positions);
 
-  const focusId = getLineageFocusId();
   const trail = getLineageTrailSet(focusId);
   const animations = new Map();
 
@@ -9689,10 +9876,12 @@ function drawFamilyTreePanel() {
     });
   }
 
-  familyTreeCtx.save();
-  familyTreeCtx.globalCompositeOperation = "lighter";
-  familyTreeCtx.lineCap = "round";
-  familyTreeCtx.lineJoin = "round";
+  const viewBottom = viewTop + height;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
     if (node.parentId === null || node.parentId === undefined) {
@@ -9732,19 +9921,30 @@ function drawFamilyTreePanel() {
     const livingGlowEnd = retractingFromChild
       ? lineProgress * (1 - clamp(childDeathAge / Math.max(1, FAMILY_TREE_LIVING_LINK_UNDRAW_FRAMES), 0, 1))
       : lineProgress;
-    const controlY = (parentPos.y + childPos.y) * 0.5;
+    const startYWorld = parentPos.y + 6;
+    const endYWorld = childPos.y - 6;
+    if (
+      !fullRender
+      && (
+        Math.max(startYWorld, endYWorld) < viewTop - FAMILY_TREE_VIEW_OVERSCAN
+        || Math.min(startYWorld, endYWorld) > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+      )
+    ) {
+      continue;
+    }
+    const controlY = (parentPos.y + childPos.y) * 0.5 - viewTop;
     const drawActive = lineProgress < 0.999;
     const startX = parentPos.x;
-    const startY = parentPos.y + 6;
+    const startY = startYWorld - viewTop;
     const endX = childPos.x;
-    const endY = childPos.y - 6;
+    const endY = endYWorld - viewTop;
     const baseAlpha = highlighted
       ? drawActive ? 0.98 : 0.88
       : livingLink
         ? drawActive ? 0.88 : 0.68
         : drawActive ? 0.62 : 0.34;
-    familyTreeCtx.strokeStyle = createFamilyTreeGradient(
-      familyTreeCtx,
+    ctx.strokeStyle = createFamilyTreeGradient(
+      ctx,
       parentNode,
       node,
       startX,
@@ -9754,19 +9954,19 @@ function drawFamilyTreePanel() {
       baseAlpha,
       baseAlpha
     );
-    familyTreeCtx.lineWidth = highlighted
+    ctx.lineWidth = highlighted
       ? 4.8
       : livingLink
         ? drawActive ? 4.1 : 3.3
         : drawActive ? 3.1 : 2.3;
-    familyTreeCtx.shadowBlur = highlighted ? 18 : livingLink ? 15 : drawActive ? 10 : 0;
-    familyTreeCtx.shadowColor = highlighted
+    ctx.shadowBlur = highlighted ? 18 : livingLink ? 15 : drawActive ? 10 : 0;
+    ctx.shadowColor = highlighted
       ? getFamilyTreeNodeAccentColor(node, 0.78)
       : livingLink
         ? getFamilyTreeNodeAccentColor(node, 0.62)
         : getFamilyTreeNodeAccentColor(node, 0.34);
     strokePartialBezier(
-      familyTreeCtx,
+      ctx,
       startX,
       startY,
       startX,
@@ -9777,11 +9977,11 @@ function drawFamilyTreePanel() {
       endY,
       lineProgress
     );
-    familyTreeCtx.shadowBlur = 0;
+    ctx.shadowBlur = 0;
 
     if (livingLink || retractingLivingLink) {
-      familyTreeCtx.strokeStyle = createFamilyTreeGradient(
-        familyTreeCtx,
+      ctx.strokeStyle = createFamilyTreeGradient(
+        ctx,
         parentNode,
         node,
         startX,
@@ -9792,9 +9992,9 @@ function drawFamilyTreePanel() {
         highlighted ? 0.84 : drawActive ? 0.48 : 0.3,
         true
       );
-      familyTreeCtx.lineWidth = highlighted ? 2.7 : 2.1;
+      ctx.lineWidth = highlighted ? 2.7 : 2.1;
       strokeBezierRange(
-        familyTreeCtx,
+        ctx,
         startX,
         startY,
         startX,
@@ -9809,8 +10009,8 @@ function drawFamilyTreePanel() {
     }
 
     if (highlighted) {
-      familyTreeCtx.strokeStyle = createFamilyTreeGradient(
-        familyTreeCtx,
+      ctx.strokeStyle = createFamilyTreeGradient(
+        ctx,
         parentNode,
         node,
         startX,
@@ -9821,9 +10021,9 @@ function drawFamilyTreePanel() {
         0.54,
         true
       );
-      familyTreeCtx.lineWidth = 1.5;
+      ctx.lineWidth = 1.5;
       strokePartialBezier(
-        familyTreeCtx,
+        ctx,
         startX,
         startY,
         startX,
@@ -9836,12 +10036,21 @@ function drawFamilyTreePanel() {
       );
     }
   }
-  familyTreeCtx.restore();
+  ctx.restore();
 
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
     const position = renderPositions.get(node.id);
     if (!position) {
+      continue;
+    }
+    if (
+      !fullRender
+      && (
+        position.y < viewTop - FAMILY_TREE_VIEW_OVERSCAN
+        || position.y > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+      )
+    ) {
       continue;
     }
 
@@ -9904,107 +10113,109 @@ function drawFamilyTreePanel() {
         ? 1 - smooth01(deathProgress / 0.55) * 0.9
         : 0.1 + smooth01((deathProgress - 0.55) / 0.45) * 0.9
       : 1;
+    const drawX = position.x;
+    const drawY = position.y - viewTop;
     const nodeWidth = nodeSize;
     const nodeHeight = Math.max(2, nodeSize * winkScale);
 
-    familyTreeCtx.save();
+    ctx.save();
 
     if (flashStrength > 0.001) {
-      familyTreeCtx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = "lighter";
       const flashRadius = nodeSize * (1.6 + flashStrength * 1.8);
-      const flashGradient = familyTreeCtx.createRadialGradient(
-        position.x,
-        position.y,
+      const flashGradient = ctx.createRadialGradient(
+        drawX,
+        drawY,
         0,
-        position.x,
-        position.y,
+        drawX,
+        drawY,
         flashRadius
       );
       flashGradient.addColorStop(0, getEntityHighlightColor(node, 0.38 + flashStrength * 0.34));
       flashGradient.addColorStop(0.3, getEntityBodyColor(node, 0.2 + flashStrength * 0.24));
       flashGradient.addColorStop(1, getEntityBodyColor(node, 0));
-      familyTreeCtx.fillStyle = flashGradient;
-      familyTreeCtx.beginPath();
-      familyTreeCtx.arc(position.x, position.y, flashRadius, 0, TAU);
-      familyTreeCtx.fill();
+      ctx.fillStyle = flashGradient;
+      ctx.beginPath();
+      ctx.arc(drawX, drawY, flashRadius, 0, TAU);
+      ctx.fill();
 
-      familyTreeCtx.strokeStyle = getEntityHighlightColor(node, 0.34 + flashStrength * 0.54);
-      familyTreeCtx.lineWidth = 1 + flashStrength * 1.6;
+      ctx.strokeStyle = getEntityHighlightColor(node, 0.34 + flashStrength * 0.54);
+      ctx.lineWidth = 1 + flashStrength * 1.6;
       const rayLength = nodeSize * (0.9 + flashStrength * 0.9);
-      familyTreeCtx.beginPath();
-      familyTreeCtx.moveTo(position.x - rayLength, position.y);
-      familyTreeCtx.lineTo(position.x + rayLength, position.y);
-      familyTreeCtx.moveTo(position.x, position.y - rayLength);
-      familyTreeCtx.lineTo(position.x, position.y + rayLength);
-      familyTreeCtx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(drawX - rayLength, drawY);
+      ctx.lineTo(drawX + rayLength, drawY);
+      ctx.moveTo(drawX, drawY - rayLength);
+      ctx.lineTo(drawX, drawY + rayLength);
+      ctx.stroke();
     }
 
-    familyTreeCtx.globalCompositeOperation = "lighter";
-    familyTreeCtx.fillStyle = haloColor;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = haloColor;
     const livingHaloSize = nodeWidth + (alive || recentDeath ? 4 : 2);
-    familyTreeCtx.fillRect(
-      Math.round(position.x - livingHaloSize * 0.5),
-      Math.round(position.y - Math.max(nodeHeight, livingHaloSize) * 0.5),
+    ctx.fillRect(
+      Math.round(drawX - livingHaloSize * 0.5),
+      Math.round(drawY - Math.max(nodeHeight, livingHaloSize) * 0.5),
       Math.round(livingHaloSize),
       Math.round(Math.max(nodeHeight, livingHaloSize))
     );
 
-    familyTreeCtx.shadowBlur = highlighted ? 22 : alive || recentDeath ? 15 : 8;
-    familyTreeCtx.shadowColor = shadowColor;
-    familyTreeCtx.fillStyle = fillColor;
-    familyTreeCtx.fillRect(
-      Math.round(position.x - nodeWidth * 0.5),
-      Math.round(position.y - nodeHeight * 0.5),
+    ctx.shadowBlur = highlighted ? 22 : alive || recentDeath ? 15 : 8;
+    ctx.shadowColor = shadowColor;
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(
+      Math.round(drawX - nodeWidth * 0.5),
+      Math.round(drawY - nodeHeight * 0.5),
       Math.round(nodeWidth),
       Math.round(nodeHeight)
     );
-    familyTreeCtx.shadowBlur = 0;
+    ctx.shadowBlur = 0;
 
     if (recentDeath) {
-      familyTreeCtx.globalCompositeOperation = "lighter";
-      familyTreeCtx.fillStyle = getEntityHighlightColor(node, 0.14 + (1 - deathProgress) * 0.38);
-      familyTreeCtx.fillRect(
-        Math.round(position.x - nodeWidth * 0.54),
-        Math.round(position.y - 1),
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = getEntityHighlightColor(node, 0.14 + (1 - deathProgress) * 0.38);
+      ctx.fillRect(
+        Math.round(drawX - nodeWidth * 0.54),
+        Math.round(drawY - 1),
         Math.round(nodeWidth * 1.08),
         2
       );
     }
 
-    familyTreeCtx.strokeStyle = strokeColor;
-    familyTreeCtx.lineWidth = highlighted ? 2.4 : alive || recentDeath ? 1.8 : 1.2;
-    familyTreeCtx.strokeRect(
-      Math.round(position.x - nodeWidth * 0.5) - 0.5,
-      Math.round(position.y - nodeHeight * 0.5) - 0.5,
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = highlighted ? 2.4 : alive || recentDeath ? 1.8 : 1.2;
+    ctx.strokeRect(
+      Math.round(drawX - nodeWidth * 0.5) - 0.5,
+      Math.round(drawY - nodeHeight * 0.5) - 0.5,
       Math.round(nodeWidth),
       Math.round(nodeHeight)
     );
 
     if (!alive && !recentDeath) {
-      familyTreeCtx.strokeStyle = getEntityHighlightColor(node, 0.36);
-      familyTreeCtx.beginPath();
-      familyTreeCtx.moveTo(position.x - nodeWidth * 0.36, position.y - nodeHeight * 0.36);
-      familyTreeCtx.lineTo(position.x + nodeWidth * 0.36, position.y + nodeHeight * 0.36);
-      familyTreeCtx.moveTo(position.x + nodeWidth * 0.36, position.y - nodeHeight * 0.36);
-      familyTreeCtx.lineTo(position.x - nodeWidth * 0.36, position.y + nodeHeight * 0.36);
-      familyTreeCtx.stroke();
+      ctx.strokeStyle = getEntityHighlightColor(node, 0.36);
+      ctx.beginPath();
+      ctx.moveTo(drawX - nodeWidth * 0.36, drawY - nodeHeight * 0.36);
+      ctx.lineTo(drawX + nodeWidth * 0.36, drawY + nodeHeight * 0.36);
+      ctx.moveTo(drawX + nodeWidth * 0.36, drawY - nodeHeight * 0.36);
+      ctx.lineTo(drawX - nodeWidth * 0.36, drawY + nodeHeight * 0.36);
+      ctx.stroke();
     }
 
     if (labelVisible) {
-      familyTreeCtx.font = highlighted ? CANVAS_FONTS.body : CANVAS_FONTS.tiny;
-      familyTreeCtx.fillStyle = labelColor;
-      familyTreeCtx.textAlign = "center";
-      familyTreeCtx.fillText(
+      ctx.font = highlighted ? CANVAS_FONTS.body : CANVAS_FONTS.tiny;
+      ctx.fillStyle = labelColor;
+      ctx.textAlign = "center";
+      ctx.fillText(
         `C${String(node.id).padStart(3, "0")}`,
-        position.x,
-        position.y - Math.max(nodeHeight, nodeWidth) * 0.7 - 4
+        drawX,
+        drawY - Math.max(nodeHeight, nodeWidth) * 0.7 - 4
       );
     }
 
-    familyTreeCtx.restore();
+    ctx.restore();
   }
 
-  familyTreeCtx.textAlign = "left";
+  ctx.textAlign = "left";
 
   if (focusId && trail.size > 0) {
     const focusNode = state.lineageNodes.get(focusId);
@@ -10018,7 +10229,10 @@ function drawFamilyTreePanel() {
     setElementText(familyTreeStatus, "Live ancestry map active. Scroll to inspect older branches.");
   }
 
-  updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom);
+  if (runtimeTarget) {
+    updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBottom);
+    commitFamilyTreeRenderState(focusId, true);
+  }
 }
 
 function updateStats() {
