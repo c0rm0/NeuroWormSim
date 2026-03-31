@@ -1900,6 +1900,19 @@ function markFamilyTreeManualScrollIntent() {
   familyTreeManualScrollIntentUntil = getNowMs() + FAMILY_TREE_MANUAL_SCROLL_INTENT_MS;
 }
 
+function handleFamilyTreeTouchIntent() {
+  markFamilyTreeManualScrollIntent();
+  pauseFamilyTreeAutoScroll();
+}
+
+function handleFamilyTreePointerIntent(event) {
+  if (event?.pointerType === "touch" || event?.pointerType === "pen") {
+    handleFamilyTreeTouchIntent();
+    return;
+  }
+  markFamilyTreeManualScrollIntent();
+}
+
 function handleFamilyTreeScroll() {
   if (!familyTreeScroll) {
     return;
@@ -9137,9 +9150,9 @@ resetControlsButton.addEventListener("click", resetControlDeck);
 sampleLongestButton.addEventListener("click", sampleFeaturedCreatureToBank);
 exportFamilyTreeButton?.addEventListener("click", exportFamilyTreePng);
 familyTreeScroll?.addEventListener("wheel", markFamilyTreeManualScrollIntent, { passive: true });
-familyTreeScroll?.addEventListener("touchstart", markFamilyTreeManualScrollIntent, { passive: true });
-familyTreeScroll?.addEventListener("touchmove", markFamilyTreeManualScrollIntent, { passive: true });
-familyTreeScroll?.addEventListener("pointerdown", markFamilyTreeManualScrollIntent, { passive: true });
+familyTreeScroll?.addEventListener("touchstart", handleFamilyTreeTouchIntent, { passive: true });
+familyTreeScroll?.addEventListener("touchmove", handleFamilyTreeTouchIntent, { passive: true });
+familyTreeScroll?.addEventListener("pointerdown", handleFamilyTreePointerIntent, { passive: true });
 familyTreeScroll?.addEventListener("scroll", handleFamilyTreeScroll, { passive: true });
 openHonoredWormsButton.addEventListener("click", () => setHonoredWormsModalOpen(true));
 openBrainBankButton.addEventListener("click", () => setBrainBankModalOpen(true));
