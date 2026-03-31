@@ -440,6 +440,8 @@ const audioState = {
 let familyTreeAutoScrollPausedUntil = 0;
 let familyTreeAutoScrollSuppressUntil = 0;
 let familyTreeManualScrollIntentUntil = 0;
+let familyTreeExpectedScrollTop = null;
+let familyTreeExpectedScrollUntil = 0;
 
 function rand(min, max) {
   return Math.random() * (max - min) + min;
@@ -1826,7 +1828,7 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
   const targetNode = deepestLivingNode || deepestNode || getFamilyTreeActivityNode(sortedNodes, animations)?.node || null;
   const scrollLimit = Math.max(0, familyTreeScroll.scrollHeight - familyTreeScroll.clientHeight);
   if (scrollLimit <= 0) {
-    familyTreeScroll.scrollTop = 0;
+    setFamilyTreeProgrammaticScrollTop(0);
     return;
   }
 
@@ -1880,20 +1882,30 @@ function updateFamilyTreeScroll(positions, sortedNodes, animations, stickToBotto
 
   const scrollDelta = targetScrollTop - familyTreeScroll.scrollTop;
   if (Math.abs(scrollDelta) >= FAMILY_TREE_SCROLL_SNAP_DISTANCE) {
-    familyTreeAutoScrollSuppressUntil = getNowMs() + FAMILY_TREE_SCROLL_SUPPRESS_MS;
-    familyTreeScroll.scrollTop = targetScrollTop;
+    setFamilyTreeProgrammaticScrollTop(targetScrollTop);
     return;
   }
 
   const nextScrollTop = damp(familyTreeScroll.scrollTop, targetScrollTop, FAMILY_TREE_SCROLL_FOLLOW);
-  familyTreeAutoScrollSuppressUntil = getNowMs() + FAMILY_TREE_SCROLL_SUPPRESS_MS;
-  familyTreeScroll.scrollTop = Math.abs(targetScrollTop - familyTreeScroll.scrollTop) < 0.75
-    ? targetScrollTop
-    : nextScrollTop;
+  setFamilyTreeProgrammaticScrollTop(
+    Math.abs(targetScrollTop - familyTreeScroll.scrollTop) < 0.75
+      ? targetScrollTop
+      : nextScrollTop
+  );
 }
 
 function pauseFamilyTreeAutoScroll() {
   familyTreeAutoScrollPausedUntil = getNowMs() + FAMILY_TREE_MANUAL_SCROLL_PAUSE_MS;
+}
+
+function setFamilyTreeProgrammaticScrollTop(nextScrollTop) {
+  if (!familyTreeScroll) {
+    return;
+  }
+  familyTreeExpectedScrollTop = nextScrollTop;
+  familyTreeExpectedScrollUntil = getNowMs() + FAMILY_TREE_SCROLL_SUPPRESS_MS;
+  familyTreeAutoScrollSuppressUntil = familyTreeExpectedScrollUntil;
+  familyTreeScroll.scrollTop = nextScrollTop;
 }
 
 function markFamilyTreeManualScrollIntent() {
@@ -1918,11 +1930,14 @@ function handleFamilyTreeScroll() {
     return;
   }
   const now = getNowMs();
-  if (now <= familyTreeAutoScrollSuppressUntil) {
+  const expectedProgrammaticScroll = familyTreeExpectedScrollTop !== null
+    && now <= familyTreeExpectedScrollUntil
+    && Math.abs(familyTreeScroll.scrollTop - familyTreeExpectedScrollTop) <= 1.25;
+  if (expectedProgrammaticScroll) {
     return;
   }
-  if (now > familyTreeManualScrollIntentUntil) {
-    return;
+  if (now > familyTreeExpectedScrollUntil) {
+    familyTreeExpectedScrollTop = null;
   }
   pauseFamilyTreeAutoScroll();
 }
