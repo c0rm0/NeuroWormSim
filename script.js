@@ -242,6 +242,8 @@ const FAMILY_TREE_LAYOUT_FOLLOW = 0.24;
 const FAMILY_TREE_LAYOUT_SNAP_DISTANCE = 0.35;
 const FAMILY_TREE_SUBTREE_GAP_UNITS = 0.65;
 const FAMILY_TREE_ROOT_GAP_UNITS = 2.4;
+const FAMILY_TREE_SIBLING_SPACING_UNITS = 1;
+const FAMILY_TREE_PARENT_GROUP_GAP_UNITS = 1.6;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS = 35;
 const FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS = 350;
@@ -2524,15 +2526,76 @@ function getLineageLayoutData() {
     );
   }
 
+  const siblingGroupsByGeneration = new Map();
+  const displayLayoutUnits = new Map();
+  for (const [generation, generationNodes] of nodesByGeneration.entries()) {
+    const siblingGroups = [];
+    let currentGroup = null;
+
+    for (let index = 0; index < generationNodes.length; index += 1) {
+      const node = generationNodes[index];
+      const parentGroupKey = Number.isFinite(node.parentId) && nodesById.has(node.parentId)
+        ? `parent:${node.parentId}`
+        : `root:${node.id}`;
+      if (!currentGroup || currentGroup.key !== parentGroupKey) {
+        currentGroup = {
+          key: parentGroupKey,
+          parentId: Number.isFinite(node.parentId) && nodesById.has(node.parentId)
+            ? node.parentId
+            : null,
+          nodes: []
+        };
+        siblingGroups.push(currentGroup);
+      }
+      currentGroup.nodes.push(node);
+    }
+    siblingGroupsByGeneration.set(generation, siblingGroups);
+
+    let previousGroupMax = null;
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      const groupBasePositions = group.nodes.map((node) => layoutUnits.get(node.id) ?? 0);
+      const firstBaseX = groupBasePositions[0] ?? 0;
+      const lastBaseX = groupBasePositions[groupBasePositions.length - 1] ?? firstBaseX;
+      const groupBaseCenter = (firstBaseX + lastBaseX) * 0.5;
+      const groupWidth = Math.max(
+        0,
+        (group.nodes.length - 1) * FAMILY_TREE_SIBLING_SPACING_UNITS
+      );
+      const groupHalfWidth = groupWidth * 0.5;
+      const desiredCenter = group.parentId !== null
+        ? (layoutUnits.get(group.parentId) ?? groupBaseCenter)
+        : groupBaseCenter;
+      let placedCenter = desiredCenter;
+      let placedMin = placedCenter - groupHalfWidth;
+      let placedMax = placedCenter + groupHalfWidth;
+
+      if (previousGroupMax !== null && placedMin < previousGroupMax + FAMILY_TREE_PARENT_GROUP_GAP_UNITS) {
+        const shift = previousGroupMax + FAMILY_TREE_PARENT_GROUP_GAP_UNITS - placedMin;
+        placedCenter += shift;
+        placedMin += shift;
+        placedMax += shift;
+      }
+
+      for (let nodeIndex = 0; nodeIndex < group.nodes.length; nodeIndex += 1) {
+        const node = group.nodes[nodeIndex];
+        const nodeX = placedCenter - groupHalfWidth + nodeIndex * FAMILY_TREE_SIBLING_SPACING_UNITS;
+        displayLayoutUnits.set(node.id, nodeX);
+      }
+
+      previousGroupMax = placedMax;
+    }
+  }
+
   const sortedNodes = nodes.slice().sort((leftNode, rightNode) =>
     leftNode.generation - rightNode.generation
-    || (layoutUnits.get(leftNode.id) ?? 0) - (layoutUnits.get(rightNode.id) ?? 0)
+    || (displayLayoutUnits.get(leftNode.id) ?? 0) - (displayLayoutUnits.get(rightNode.id) ?? 0)
     || leftNode.birthOrder - rightNode.birthOrder
   );
   let layoutMinX = Infinity;
   let layoutMaxX = -Infinity;
   for (let i = 0; i < nodes.length; i += 1) {
-    const layoutX = layoutUnits.get(nodes[i].id);
+    const layoutX = displayLayoutUnits.get(nodes[i].id);
     if (!Number.isFinite(layoutX)) {
       continue;
     }
@@ -2548,9 +2611,10 @@ function getLineageLayoutData() {
     version: state.lineageStructureVersion,
     nodes,
     nodesByGeneration,
+    siblingGroupsByGeneration,
     sortedNodes,
     maxGeneration,
-    layoutUnits,
+    displayLayoutUnits,
     layoutMinX,
     layoutMaxX
   };
@@ -9884,9 +9948,10 @@ function drawFamilyTreePanel(options = {}) {
   const {
     nodes,
     nodesByGeneration,
+    siblingGroupsByGeneration,
     sortedNodes,
     maxGeneration,
-    layoutUnits,
+    displayLayoutUnits,
     layoutMinX,
     layoutMaxX
   } = layoutData;
@@ -9988,7 +10053,7 @@ function drawFamilyTreePanel(options = {}) {
 
     for (let index = 0; index < generationNodes.length; index += 1) {
       const node = generationNodes[index];
-      const layoutX = layoutUnits.get(node.id) ?? layoutMinX;
+      const layoutX = displayLayoutUnits.get(node.id) ?? layoutMinX;
       positions.set(node.id, {
         x: hasLayoutSpread
           ? FAMILY_TREE_MARGIN_X + ((layoutX - layoutMinX) / layoutSpan) * usableWidth
@@ -10034,6 +10099,94 @@ function drawFamilyTreePanel(options = {}) {
   ctx.globalCompositeOperation = "lighter";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  for (let generation = 1; generation <= maxGeneration; generation += 1) {
+    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      if (!Array.isArray(group.nodes) || group.nodes.length < 2) {
+        continue;
+      }
+
+      const visibleNodes = group.nodes.filter((node) => {
+        const animation = animations.get(node.id);
+        return animation ? animation.visible : true;
+      });
+      if (visibleNodes.length < 2) {
+        continue;
+      }
+
+      const siblingPositions = visibleNodes
+        .map((node) => ({
+          node,
+          position: renderPositions.get(node.id)
+        }))
+        .filter((entry) => Boolean(entry.position));
+      if (siblingPositions.length < 2) {
+        continue;
+      }
+
+      const siblingBarWorldY = siblingPositions[0].position.y - 12;
+      if (
+        !fullRender
+        && (
+          siblingBarWorldY < viewTop - FAMILY_TREE_VIEW_OVERSCAN
+          || siblingBarWorldY > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+        )
+      ) {
+        continue;
+      }
+
+      const siblingBarY = siblingBarWorldY - viewTop;
+      const groupHighlighted = visibleNodes.some((node) => trail.has(node.id));
+      const groupLiving = visibleNodes.some((node) => node.alive);
+      const siblingAlpha = groupHighlighted
+        ? 0.72
+        : groupLiving
+          ? 0.5
+          : 0.26;
+
+      for (let index = 1; index < siblingPositions.length; index += 1) {
+        const leftEntry = siblingPositions[index - 1];
+        const rightEntry = siblingPositions[index];
+        ctx.strokeStyle = createFamilyTreeGradient(
+          ctx,
+          leftEntry.node,
+          rightEntry.node,
+          leftEntry.position.x,
+          siblingBarY,
+          rightEntry.position.x,
+          siblingBarY,
+          siblingAlpha,
+          siblingAlpha
+        );
+        ctx.lineWidth = groupHighlighted ? 2.6 : groupLiving ? 2 : 1.4;
+        ctx.shadowBlur = groupHighlighted ? 12 : groupLiving ? 8 : 0;
+        ctx.shadowColor = groupHighlighted
+          ? getFamilyTreeNodeAccentColor(rightEntry.node, 0.58)
+          : getFamilyTreeNodeAccentColor(rightEntry.node, 0.32);
+        ctx.beginPath();
+        ctx.moveTo(leftEntry.position.x, siblingBarY);
+        ctx.lineTo(rightEntry.position.x, siblingBarY);
+        ctx.stroke();
+      }
+
+      ctx.shadowBlur = 0;
+      for (let index = 0; index < siblingPositions.length; index += 1) {
+        const { node, position } = siblingPositions[index];
+        const stemEndY = position.y - 6 - viewTop;
+        ctx.strokeStyle = getFamilyTreeNodeAccentColor(
+          node,
+          groupHighlighted ? 0.76 : groupLiving ? 0.46 : 0.24
+        );
+        ctx.lineWidth = groupHighlighted ? 1.8 : 1.2;
+        ctx.beginPath();
+        ctx.moveTo(position.x, siblingBarY);
+        ctx.lineTo(position.x, stemEndY);
+        ctx.stroke();
+      }
+    }
+  }
+
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
     if (node.parentId === null || node.parentId === undefined) {
