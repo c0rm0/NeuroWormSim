@@ -466,6 +466,7 @@ const state = {
   lineageNodes: new Map(),
   lineageDisplayPositions: new Map(),
   lineageStructureVersion: 0,
+  lineageVisualVersion: 0,
   lineageLayoutCache: null,
   lineageBirthOrder: 0,
   influenceTool: {
@@ -500,6 +501,9 @@ let familyTreeRenderState = {
   lastRenderMs: -Infinity,
   lastFocusId: null,
   lastStructureVersion: -1,
+  lastVisualVersion: -1,
+  lastPositionStructureVersion: -1,
+  lastAnimationActive: false,
   lastHadNodes: false,
   lastPanelCollapsed: false
 };
@@ -508,6 +512,7 @@ let worldBackgroundBuffer = null;
 let telemetryBackgroundBuffer = null;
 let networkBackgroundBuffer = null;
 let familyTreeBackgroundBuffer = { key: "", canvas: null };
+let familyTreeStaticBuffer = { key: "", canvas: null, ctx: null };
 let networkPanelLayoutCache = { key: "", layout: null };
 
 function rand(min, max) {
@@ -2086,15 +2091,26 @@ function resetTelemetryHistory() {
   pushTelemetrySample(true);
 }
 
+function invalidateFamilyTreeStaticBuffer() {
+  familyTreeStaticBuffer = { key: "", canvas: null, ctx: null };
+}
+
+function markFamilyTreeVisualChange() {
+  state.lineageVisualVersion += 1;
+  invalidateFamilyTreeStaticBuffer();
+}
+
 function invalidateLineageLayoutCache() {
   state.lineageStructureVersion += 1;
   state.lineageLayoutCache = null;
+  invalidateFamilyTreeStaticBuffer();
 }
 
 function resetLineageTree() {
   state.lineageNodes = new Map();
   state.lineageDisplayPositions = new Map();
   state.lineageStructureVersion = 0;
+  state.lineageVisualVersion = 0;
   state.lineageLayoutCache = null;
   state.lineageBirthOrder = 0;
   familyTreeVirtualHeight = FAMILY_TREE_MIN_HEIGHT;
@@ -2106,7 +2122,11 @@ function resetLineageTree() {
   familyTreeRenderState.lastRenderMs = -Infinity;
   familyTreeRenderState.lastFocusId = null;
   familyTreeRenderState.lastStructureVersion = -1;
+  familyTreeRenderState.lastVisualVersion = -1;
+  familyTreeRenderState.lastPositionStructureVersion = -1;
+  familyTreeRenderState.lastAnimationActive = false;
   familyTreeRenderState.lastHadNodes = false;
+  invalidateFamilyTreeStaticBuffer();
 }
 
 function invalidateFamilyTreeRender(animationFrames = 0, force = true) {
@@ -2310,13 +2330,9 @@ function getFamilyTreeActivityNode(sortedNodes, animations) {
       continue;
     }
 
-    const birthAge = Math.max(
-      0,
-      state.tick - (Number.isFinite(node.birthTick) ? node.birthTick : state.tick)
-    );
-    const isActive = animation.lineProgress < 0.999
-      || animation.flashStrength > 0.01
-      || birthAge <= FAMILY_TREE_ACTIVITY_WINDOW;
+    const isActive = animation.activeLink
+      || animation.activeNode
+      || animation.birthAge <= FAMILY_TREE_ACTIVITY_WINDOW;
     if (!isActive) {
       continue;
     }
@@ -2647,14 +2663,11 @@ function getFamilyTreeRenderPositions(targetPositions) {
       continue;
     }
 
-    current.x = Math.abs(target.x - current.x) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
-      ? target.x
-      : damp(current.x, target.x, FAMILY_TREE_LAYOUT_FOLLOW);
-    current.y = Math.abs(target.y - current.y) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
-      ? target.y
-      : damp(current.y, target.y, FAMILY_TREE_LAYOUT_FOLLOW);
+    current.x = target.x;
+    current.y = target.y;
   }
 
+  familyTreeRenderState.lastPositionStructureVersion = state.lineageStructureVersion;
   return renderPositions;
 }
 
@@ -4794,6 +4807,7 @@ function killCreature(creature) {
     lineageNode.age = creature.age;
     lineageNode.recentAction = creature.recentAction;
   }
+  markFamilyTreeVisualChange();
   invalidateFamilyTreeRender(FAMILY_TREE_DEATH_WINK_FRAMES + FAMILY_TREE_LINK_DRAW_FRAMES);
   recordArchive(creature);
   if (wasLastLiving) {
@@ -9889,462 +9903,39 @@ function createFamilyTreeGradient(ctx, startNode, endNode, startX, startY, endX,
   return gradient;
 }
 
-function drawFamilyTreeBackground(
-  ctx,
-  width,
-  height,
-  maxGeneration,
-  familyTreeLeadPadding,
-  viewTop = 0,
-  viewLeft = 0,
-  viewWidth = width
-) {
-  const viewBottom = viewTop + height;
-  const visibleWidth = Math.max(1, Math.min(width - viewLeft, viewWidth));
-  const viewRight = Math.min(width, viewLeft + visibleWidth);
-  ctx.fillStyle = "rgba(2, 8, 13, 0.98)";
-  ctx.fillRect(viewLeft, 0, visibleWidth, height);
-
-  const stripeStart = Math.floor(viewTop / 18) * 18;
-  for (let worldY = stripeStart; worldY < viewBottom; worldY += 18) {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
-    ctx.fillRect(viewLeft, Math.round(worldY - viewTop), visibleWidth, 1);
-  }
-
-  const firstGeneration = Math.max(
-    1,
-    Math.floor((viewTop - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET - FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
-  );
-  const lastGeneration = Math.min(
-    maxGeneration,
-    Math.ceil((viewBottom - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET + FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
-  );
-
-  for (let generation = firstGeneration; generation <= lastGeneration; generation += 1) {
-    const worldY = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
-    const y = Math.round(worldY - viewTop);
-    const lineStart = Math.max(viewLeft, FAMILY_TREE_MARGIN_X - 12);
-    const lineEnd = Math.min(viewRight, width - (FAMILY_TREE_MARGIN_X - 12));
-    ctx.fillStyle = "rgba(102, 220, 255, 0.08)";
-    if (lineEnd > lineStart) {
-      ctx.fillRect(lineStart, y, lineEnd - lineStart, 1);
-    }
-    if (viewLeft <= 48) {
-      ctx.fillStyle = generation % 2 === 0
-        ? "rgba(255, 241, 123, 0.52)"
-        : "rgba(157, 231, 255, 0.54)";
-      ctx.font = CANVAS_FONTS.compact;
-      ctx.textAlign = "left";
-      ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
-    }
-  }
+function getFamilyTreeSiblingGroupKey(generation, group) {
+  return `${generation}:${group?.key ?? "group"}`;
 }
 
-function getFamilyTreeCanvasDisplayScale(canvas = familyTreeCanvas) {
-  if (!canvas) {
-    return 1;
-  }
-  const internalWidth = Math.max(1, canvas.width || 1);
-  const displayWidth = Math.max(1, canvas.clientWidth || familyTreeScroll?.clientWidth || internalWidth);
-  return displayWidth / internalWidth;
-}
-
-function getFamilyTreeViewportHeight(displayScale = getFamilyTreeCanvasDisplayScale()) {
-  const safeScale = Number.isFinite(displayScale) && displayScale > 0
-    ? displayScale
-    : 1;
-  return Math.max(1, Math.round((familyTreeScroll?.clientHeight || FAMILY_TREE_MIN_HEIGHT) / safeScale));
-}
-
-function getFamilyTreeViewportWidth(displayScale = getFamilyTreeCanvasDisplayScale()) {
-  const safeScale = Number.isFinite(displayScale) && displayScale > 0
-    ? displayScale
-    : 1;
-  return Math.max(
-    1,
-    Math.round((familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) / safeScale)
-  );
-}
-
-function getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth = familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) {
-  const minimumWidth = Math.max(620, Math.round(viewportWidth || 620));
-  if (!layoutData?.nodes?.length) {
-    return minimumWidth;
-  }
-
-  let desiredUsableWidth = Math.max(0, minimumWidth - FAMILY_TREE_MARGIN_X * 2);
-  const siblingGroupsByGeneration = layoutData.siblingGroupsByGeneration;
-  if (siblingGroupsByGeneration instanceof Map) {
-    for (const siblingGroups of siblingGroupsByGeneration.values()) {
-      const siblingStepCount = siblingGroups.reduce(
-        (sum, group) => sum + Math.max(0, (group?.nodes?.length || 0) - 1),
-        0
-      );
-      const groupGapCount = Math.max(0, siblingGroups.length - 1);
-      desiredUsableWidth = Math.max(
-        desiredUsableWidth,
-        siblingStepCount * FAMILY_TREE_SIBLING_LOCK_SPACING_PX
-        + groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX
-      );
-    }
-  }
-
-  return Math.max(
-    minimumWidth,
-    Math.ceil(FAMILY_TREE_MARGIN_X * 2 + desiredUsableWidth)
-  );
-}
-
-function shouldRenderFamilyTreePanel(fullRender = false) {
-  if (fullRender) {
+function shouldSkipFamilyTreeEntry(id, onlyIds, skipIds) {
+  if (onlyIds && !onlyIds.has(id)) {
     return true;
   }
-
-  const collapsed = familyTreePanel?.classList.contains("is-collapsed") || false;
-  if (collapsed) {
-    familyTreeRenderState.lastPanelCollapsed = true;
-    return false;
-  }
-
-  const focusId = getLineageFocusId();
-  const hasNodes = state.lineageNodes.size > 0;
-  const panelExpanded = familyTreeRenderState.lastPanelCollapsed;
-  const structureDirty = familyTreeRenderState.lastStructureVersion !== state.lineageStructureVersion;
-  const focusDirty = familyTreeRenderState.lastFocusId !== focusId;
-  const nodePresenceDirty = familyTreeRenderState.lastHadNodes !== hasNodes;
-  const animationActive = state.tick <= familyTreeRenderState.animationUntilTick;
-  const timeSinceLastRender = getNowMs() - familyTreeRenderState.lastRenderMs;
-  const renderInterval = animationActive
-    ? FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS
-    : FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS;
-  const canRenderNow = timeSinceLastRender >= renderInterval;
-
-  if (panelExpanded || familyTreeRenderState.lastRenderMs === -Infinity) {
-    return true;
-  }
-
-  return (
-    familyTreeRenderState.force
-    || structureDirty
-    || focusDirty
-    || nodePresenceDirty
-    || animationActive
-  ) && canRenderNow;
+  return Boolean(skipIds && skipIds.has(id));
 }
 
-function commitFamilyTreeRenderState(focusId, hasNodes) {
-  familyTreeRenderState.force = false;
-  familyTreeRenderState.lastRenderMs = getNowMs();
-  familyTreeRenderState.lastFocusId = focusId;
-  familyTreeRenderState.lastStructureVersion = state.lineageStructureVersion;
-  familyTreeRenderState.lastHadNodes = hasNodes;
-  familyTreeRenderState.lastPanelCollapsed = false;
-}
-
-function drawFamilyTreePanel(options = {}) {
-  const fullRender = options.fullRender === true;
-  const targetCanvas = options.canvas || familyTreeCanvas;
-  const targetCtx = options.ctx || familyTreeCtx;
-  const runtimeTarget = targetCanvas === familyTreeCanvas && targetCtx === familyTreeCtx;
-  if (runtimeTarget && !shouldRenderFamilyTreePanel(fullRender)) {
-    return;
-  }
-
-  const focusId = getLineageFocusId();
-  const layoutData = getLineageLayoutData();
+function drawFamilyTreeConnectionLayers(ctx, renderData, filters = {}) {
   const {
-    nodes,
-    nodesByGeneration,
+    fullRender,
+    runtimeSlicedView,
+    height,
+    viewWidth,
+    viewTop,
+    viewBottom,
+    viewLeft,
+    viewRight,
     siblingGroupsByGeneration,
     sortedNodes,
-    maxGeneration,
-    displayLayoutUnits,
-    layoutMinX,
-    layoutMaxX
-  } = layoutData;
-  const viewportWidth = runtimeTarget
-    ? Math.max(1, familyTreeScroll?.clientWidth || targetCanvas.width || 620)
-    : Math.max(1, targetCanvas.width || familyTreeCanvas?.width || 620);
-  const desiredCanvasWidth = getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth);
-  if (targetCanvas.width !== desiredCanvasWidth) {
-    targetCanvas.width = desiredCanvasWidth;
-    targetCtx.imageSmoothingEnabled = false;
-  }
-  if (runtimeTarget) {
-    targetCanvas.style.width = `${desiredCanvasWidth}px`;
-  }
-  const width = targetCanvas.width;
-  const ctx = targetCtx;
-  const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
-  const runtimeSlicedView = runtimeTarget && !fullRender;
-  let height = FAMILY_TREE_MIN_HEIGHT;
-  let viewWidth = width;
-  let viewLeft = 0;
-  const stickToBottom = familyTreeScroll
-    ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
-    : false;
-
-  if (exportFamilyTreeButton) {
-    const exportDisabled = nodes.length === 0;
-    setElementDisabled(exportFamilyTreeButton, exportDisabled);
-    setElementTitle(
-      exportFamilyTreeButton,
-      exportDisabled
-      ? "No family tree data is available to export yet."
-      : "Save the full family tree as a PNG image."
-    );
-  }
-
-  if (nodes.length === 0) {
-    state.lineageDisplayPositions.clear();
-    if (runtimeTarget) {
-      height = getFamilyTreeViewportHeight(displayScale);
-      familyTreeVirtualHeight = height;
-      if (familyTreeSpacer) {
-        familyTreeSpacer.style.height = "0px";
-      }
-    }
-    if (targetCanvas.width !== viewportWidth) {
-      targetCanvas.width = viewportWidth;
-      targetCtx.imageSmoothingEnabled = false;
-    }
-    if (runtimeTarget) {
-      targetCanvas.style.width = `${viewportWidth}px`;
-    }
-    if (targetCanvas.height !== height) {
-      targetCanvas.height = height;
-      targetCtx.imageSmoothingEnabled = false;
-    }
-    const emptyWidth = targetCanvas.width;
-    targetCtx.clearRect(0, 0, emptyWidth, height);
-    targetCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
-    targetCtx.fillRect(0, 0, emptyWidth, height);
-    targetCtx.fillStyle = "#ddfaff";
-    targetCtx.font = CANVAS_FONTS.section;
-    targetCtx.textAlign = "center";
-    targetCtx.fillText("LINEAGE MAP WAITING", emptyWidth * 0.5, height * 0.5 - 10);
-    targetCtx.fillStyle = "#8bbfca";
-    targetCtx.font = CANVAS_FONTS.body;
-    targetCtx.fillText("Founders and offspring will appear here as the habitat runs.", emptyWidth * 0.5, height * 0.5 + 14);
-    targetCtx.textAlign = "left";
-    setElementText(familyTreeStatus, "Tracking will begin as soon as the first family line is active.");
-    if (runtimeTarget) {
-      commitFamilyTreeRenderState(focusId, false);
-    }
-    return;
-  }
-
-  const familyTreeLeadPadding = Math.max(
-    FAMILY_TREE_TOP_PADDING,
-    getFamilyTreeViewportHeight(displayScale)
-      - FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN
-      - FAMILY_TREE_ROW_CENTER_OFFSET
-  );
-  const totalHeight = Math.max(
-    FAMILY_TREE_MIN_HEIGHT,
-    familyTreeLeadPadding + maxGeneration * FAMILY_TREE_ROW_GAP + FAMILY_TREE_BOTTOM_PADDING
-  );
-  let viewTop = 0;
-  if (runtimeSlicedView) {
-    height = getFamilyTreeViewportHeight(displayScale);
-    viewWidth = Math.min(width, getFamilyTreeViewportWidth(displayScale));
-    familyTreeVirtualHeight = totalHeight;
-    if (familyTreeSpacer) {
-      familyTreeSpacer.style.height = `${Math.max(0, (totalHeight - height) * displayScale)}px`;
-    }
-    viewTop = clamp(
-      (familyTreeScroll?.scrollTop || 0) / displayScale,
-      0,
-      Math.max(0, totalHeight - height)
-    );
-    viewLeft = clamp(
-      (familyTreeScroll?.scrollLeft || 0) / displayScale,
-      0,
-      Math.max(0, width - viewWidth)
-    );
-  } else {
-    height = totalHeight;
-  }
-  if (targetCanvas.height !== height) {
-    targetCanvas.height = height;
-    targetCtx.imageSmoothingEnabled = false;
-  }
-
-  if (runtimeSlicedView) {
-    targetCtx.clearRect(viewLeft, 0, viewWidth, height);
-  } else {
-    targetCtx.clearRect(0, 0, width, height);
-  }
-  drawFamilyTreeBackground(
-    targetCtx,
-    width,
-    height,
-    maxGeneration,
-    familyTreeLeadPadding,
-    viewTop,
-    viewLeft,
-    viewWidth
-  );
-
-  const positions = new Map();
-  const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
-  const layoutSpan = layoutMaxX - layoutMinX;
-  const hasLayoutSpread = Number.isFinite(layoutSpan) && layoutSpan > 0.001;
-  const rowLeft = FAMILY_TREE_MARGIN_X;
-  const rowRight = width - FAMILY_TREE_MARGIN_X;
-
-  for (let generation = 1; generation <= maxGeneration; generation += 1) {
-    const generationNodes = nodesByGeneration.get(generation) || [];
-    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
-    const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
-
-    if (generationNodes.length === 0 || siblingGroups.length === 0) {
-      continue;
-    }
-
-    const siblingStepCount = siblingGroups.reduce(
-      (sum, group) => sum + Math.max(0, group.nodes.length - 1),
-      0
-    );
-    const groupGapCount = Math.max(0, siblingGroups.length - 1);
-    let siblingSpacingPx = FAMILY_TREE_SIBLING_LOCK_SPACING_PX;
-    let groupGapPx = FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX;
-    const desiredRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (desiredRowWidth > usableWidth) {
-      const availableAfterMinGroupGaps = Math.max(
-        0,
-        usableWidth - groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX
-      );
-      if (siblingStepCount > 0) {
-        siblingSpacingPx = Math.max(
-          FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX,
-          Math.min(
-            FAMILY_TREE_SIBLING_LOCK_SPACING_PX,
-            availableAfterMinGroupGaps / siblingStepCount
-          )
-        );
-      }
-      const remainingWidth = Math.max(0, usableWidth - siblingStepCount * siblingSpacingPx);
-      if (groupGapCount > 0) {
-        groupGapPx = Math.max(
-          FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX,
-          Math.min(
-            FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX,
-            remainingWidth / groupGapCount
-          )
-        );
-      }
-    }
-    const fittedRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (fittedRowWidth > usableWidth && siblingStepCount > 0) {
-      siblingSpacingPx = Math.max(
-        1,
-        (usableWidth - groupGapCount * groupGapPx) / siblingStepCount
-      );
-    }
-    const finalRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (finalRowWidth > usableWidth && groupGapCount > 0) {
-      groupGapPx = Math.max(
-        1,
-        (usableWidth - siblingStepCount * siblingSpacingPx) / groupGapCount
-      );
-    }
-
-    const placedGroups = [];
-    let previousGroupMax = null;
-    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
-      const group = siblingGroups[groupIndex];
-      const firstNode = group.nodes[0];
-      const lastNode = group.nodes[group.nodes.length - 1];
-      const firstLayoutX = displayLayoutUnits.get(firstNode.id) ?? layoutMinX;
-      const lastLayoutX = displayLayoutUnits.get(lastNode.id) ?? firstLayoutX;
-      const layoutCenterX = (firstLayoutX + lastLayoutX) * 0.5;
-      const desiredCenterX = group.parentId !== null && positions.has(group.parentId)
-        ? positions.get(group.parentId).x
-        : hasLayoutSpread
-          ? rowLeft + ((layoutCenterX - layoutMinX) / layoutSpan) * usableWidth
-          : rowLeft + usableWidth * 0.5;
-      const groupHalfWidth = Math.max(0, (group.nodes.length - 1) * siblingSpacingPx * 0.5);
-      let centerX = clamp(desiredCenterX, rowLeft + groupHalfWidth, rowRight - groupHalfWidth);
-      if (previousGroupMax !== null) {
-        centerX = Math.max(centerX, previousGroupMax + groupGapPx + groupHalfWidth);
-      }
-      const groupMinX = centerX - groupHalfWidth;
-      const groupMaxX = centerX + groupHalfWidth;
-      placedGroups.push({
-        group,
-        centerX,
-        groupHalfWidth,
-        minX: groupMinX,
-        maxX: groupMaxX
-      });
-      previousGroupMax = groupMaxX;
-    }
-
-    if (placedGroups.length > 0) {
-      const overflowRight = placedGroups[placedGroups.length - 1].maxX - rowRight;
-      if (overflowRight > 0) {
-        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-          placedGroups[groupIndex].centerX -= overflowRight;
-          placedGroups[groupIndex].minX -= overflowRight;
-          placedGroups[groupIndex].maxX -= overflowRight;
-        }
-      }
-      const overflowLeft = rowLeft - placedGroups[0].minX;
-      if (overflowLeft > 0) {
-        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-          placedGroups[groupIndex].centerX += overflowLeft;
-          placedGroups[groupIndex].minX += overflowLeft;
-          placedGroups[groupIndex].maxX += overflowLeft;
-        }
-      }
-    }
-
-    for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-      const { group, centerX, groupHalfWidth } = placedGroups[groupIndex];
-      for (let nodeIndex = 0; nodeIndex < group.nodes.length; nodeIndex += 1) {
-        const node = group.nodes[nodeIndex];
-        positions.set(node.id, {
-          x: centerX - groupHalfWidth + nodeIndex * siblingSpacingPx,
-          y
-        });
-      }
-    }
-  }
-
-  const renderPositions = getFamilyTreeRenderPositions(positions);
-  lockFamilyTreeSiblingRenderPositions(renderPositions, positions, siblingGroupsByGeneration);
-
-  const trail = getLineageTrailSet(focusId);
-  const animations = new Map();
-
-  for (let i = 0; i < sortedNodes.length; i += 1) {
-    const node = sortedNodes[i];
-    const birthAge = Math.max(
-      0,
-      state.tick - (Number.isFinite(node.birthTick) ? node.birthTick : state.tick)
-    );
-    const hasParent = node.parentId !== null
-      && node.parentId !== undefined
-      && state.lineageNodes.has(node.parentId);
-    const revealDelay = hasParent ? FAMILY_TREE_LINK_DRAW_FRAMES : 0;
-    const revealProgress = clamp(
-      (birthAge - revealDelay) / Math.max(1, FAMILY_TREE_NODE_FLASH_FRAMES),
-      0,
-      1
-    );
-    const flashStrength = 1 - smooth01(revealProgress);
-
-    animations.set(node.id, {
-      lineProgress: hasParent ? clamp(birthAge / FAMILY_TREE_LINK_DRAW_FRAMES, 0, 1) : 1,
-      visible: !hasParent || birthAge >= revealDelay,
-      flashStrength,
-      popScale: 1 + flashStrength * 0.45
-    });
-  }
-
-  const viewBottom = viewTop + height;
-  const viewRight = viewLeft + viewWidth;
+    renderPositions,
+    animations,
+    trail
+  } = renderData;
+  const {
+    onlySiblingGroupKeys = null,
+    skipSiblingGroupKeys = null,
+    onlyLinkNodeIds = null,
+    skipLinkNodeIds = null
+  } = filters;
 
   ctx.save();
   if (runtimeSlicedView) {
@@ -10355,11 +9946,15 @@ function drawFamilyTreePanel(options = {}) {
   ctx.globalCompositeOperation = "lighter";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let generation = 1; generation <= maxGeneration; generation += 1) {
-    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
+
+  for (const [generation, siblingGroups] of siblingGroupsByGeneration.entries()) {
     for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
       const group = siblingGroups[groupIndex];
-      if (!Array.isArray(group.nodes) || group.nodes.length < 2) {
+      const groupKey = getFamilyTreeSiblingGroupKey(generation, group);
+      if (shouldSkipFamilyTreeEntry(groupKey, onlySiblingGroupKeys, skipSiblingGroupKeys)) {
+        continue;
+      }
+      if (!Array.isArray(group?.nodes) || group.nodes.length < 2) {
         continue;
       }
 
@@ -10449,6 +10044,9 @@ function drawFamilyTreePanel(options = {}) {
 
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
+    if (shouldSkipFamilyTreeEntry(node.id, onlyLinkNodeIds, skipLinkNodeIds)) {
+      continue;
+    }
     if (node.parentId === null || node.parentId === undefined) {
       continue;
     }
@@ -10603,16 +10201,44 @@ function drawFamilyTreePanel(options = {}) {
       );
     }
   }
-  ctx.restore();
 
+  ctx.restore();
+}
+
+function drawFamilyTreeNodeLayer(ctx, renderData, filters = {}) {
+  const {
+    fullRender,
+    runtimeSlicedView,
+    height,
+    viewWidth,
+    viewTop,
+    viewBottom,
+    viewLeft,
+    viewRight,
+    sortedNodes,
+    nodesByGeneration,
+    renderPositions,
+    animations,
+    trail
+  } = renderData;
+  const {
+    onlyNodeIds = null,
+    skipNodeIds = null
+  } = filters;
+
+  ctx.save();
   if (runtimeSlicedView) {
-    ctx.save();
     ctx.beginPath();
     ctx.rect(viewLeft, 0, viewWidth, height);
     ctx.clip();
   }
+
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
+    if (shouldSkipFamilyTreeEntry(node.id, onlyNodeIds, skipNodeIds)) {
+      continue;
+    }
+
     const position = renderPositions.get(node.id);
     if (!position) {
       continue;
@@ -10789,11 +10415,635 @@ function drawFamilyTreePanel(options = {}) {
 
     ctx.restore();
   }
-  if (runtimeSlicedView) {
-    ctx.restore();
+
+  ctx.restore();
+  ctx.textAlign = "left";
+}
+
+function drawFamilyTreeBackground(
+  ctx,
+  width,
+  height,
+  maxGeneration,
+  familyTreeLeadPadding,
+  viewTop = 0,
+  viewLeft = 0,
+  viewWidth = width
+) {
+  const viewBottom = viewTop + height;
+  const visibleWidth = Math.max(1, Math.min(width - viewLeft, viewWidth));
+  const viewRight = Math.min(width, viewLeft + visibleWidth);
+  ctx.fillStyle = "rgba(2, 8, 13, 0.98)";
+  ctx.fillRect(viewLeft, 0, visibleWidth, height);
+
+  const stripeStart = Math.floor(viewTop / 18) * 18;
+  for (let worldY = stripeStart; worldY < viewBottom; worldY += 18) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+    ctx.fillRect(viewLeft, Math.round(worldY - viewTop), visibleWidth, 1);
   }
 
-  ctx.textAlign = "left";
+  const firstGeneration = Math.max(
+    1,
+    Math.floor((viewTop - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET - FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
+  );
+  const lastGeneration = Math.min(
+    maxGeneration,
+    Math.ceil((viewBottom - familyTreeLeadPadding - FAMILY_TREE_ROW_CENTER_OFFSET + FAMILY_TREE_ROW_GAP) / FAMILY_TREE_ROW_GAP) + 1
+  );
+
+  for (let generation = firstGeneration; generation <= lastGeneration; generation += 1) {
+    const worldY = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
+    const y = Math.round(worldY - viewTop);
+    const lineStart = Math.max(viewLeft, FAMILY_TREE_MARGIN_X - 12);
+    const lineEnd = Math.min(viewRight, width - (FAMILY_TREE_MARGIN_X - 12));
+    ctx.fillStyle = "rgba(102, 220, 255, 0.08)";
+    if (lineEnd > lineStart) {
+      ctx.fillRect(lineStart, y, lineEnd - lineStart, 1);
+    }
+    if (viewLeft <= 48) {
+      ctx.fillStyle = generation % 2 === 0
+        ? "rgba(255, 241, 123, 0.52)"
+        : "rgba(157, 231, 255, 0.54)";
+      ctx.font = CANVAS_FONTS.compact;
+      ctx.textAlign = "left";
+      ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+    }
+  }
+}
+
+function getFamilyTreeCanvasDisplayScale(canvas = familyTreeCanvas) {
+  if (!canvas) {
+    return 1;
+  }
+  const internalWidth = Math.max(1, canvas.width || 1);
+  const displayWidth = Math.max(1, canvas.clientWidth || familyTreeScroll?.clientWidth || internalWidth);
+  return displayWidth / internalWidth;
+}
+
+function getFamilyTreeViewportHeight(displayScale = getFamilyTreeCanvasDisplayScale()) {
+  const safeScale = Number.isFinite(displayScale) && displayScale > 0
+    ? displayScale
+    : 1;
+  return Math.max(1, Math.round((familyTreeScroll?.clientHeight || FAMILY_TREE_MIN_HEIGHT) / safeScale));
+}
+
+function getFamilyTreeViewportWidth(displayScale = getFamilyTreeCanvasDisplayScale()) {
+  const safeScale = Number.isFinite(displayScale) && displayScale > 0
+    ? displayScale
+    : 1;
+  return Math.max(
+    1,
+    Math.round((familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) / safeScale)
+  );
+}
+
+function getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth = familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) {
+  const minimumWidth = Math.max(620, Math.round(viewportWidth || 620));
+  if (!layoutData?.nodes?.length) {
+    return minimumWidth;
+  }
+
+  let desiredUsableWidth = Math.max(0, minimumWidth - FAMILY_TREE_MARGIN_X * 2);
+  const siblingGroupsByGeneration = layoutData.siblingGroupsByGeneration;
+  if (siblingGroupsByGeneration instanceof Map) {
+    for (const siblingGroups of siblingGroupsByGeneration.values()) {
+      const siblingStepCount = siblingGroups.reduce(
+        (sum, group) => sum + Math.max(0, (group?.nodes?.length || 0) - 1),
+        0
+      );
+      const groupGapCount = Math.max(0, siblingGroups.length - 1);
+      desiredUsableWidth = Math.max(
+        desiredUsableWidth,
+        siblingStepCount * FAMILY_TREE_SIBLING_LOCK_SPACING_PX
+        + groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX
+      );
+    }
+  }
+
+  return Math.max(
+    minimumWidth,
+    Math.ceil(FAMILY_TREE_MARGIN_X * 2 + desiredUsableWidth)
+  );
+}
+
+function shouldRenderFamilyTreePanel(fullRender = false) {
+  if (fullRender) {
+    return true;
+  }
+
+  const collapsed = familyTreePanel?.classList.contains("is-collapsed") || false;
+  if (collapsed) {
+    familyTreeRenderState.lastPanelCollapsed = true;
+    return false;
+  }
+
+  const focusId = getLineageFocusId();
+  const hasNodes = state.lineageNodes.size > 0;
+  const panelExpanded = familyTreeRenderState.lastPanelCollapsed;
+  const structureDirty = familyTreeRenderState.lastStructureVersion !== state.lineageStructureVersion;
+  const visualDirty = familyTreeRenderState.lastVisualVersion !== state.lineageVisualVersion;
+  const focusDirty = familyTreeRenderState.lastFocusId !== focusId;
+  const nodePresenceDirty = familyTreeRenderState.lastHadNodes !== hasNodes;
+  const animationActive = state.tick <= familyTreeRenderState.animationUntilTick;
+  const animationJustEnded = familyTreeRenderState.lastAnimationActive && !animationActive;
+  const timeSinceLastRender = getNowMs() - familyTreeRenderState.lastRenderMs;
+  const renderInterval = animationActive || animationJustEnded
+    ? FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS
+    : FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS;
+  const canRenderNow = timeSinceLastRender >= renderInterval;
+
+  if (panelExpanded || familyTreeRenderState.lastRenderMs === -Infinity) {
+    return true;
+  }
+
+  return (
+    familyTreeRenderState.force
+    || structureDirty
+    || visualDirty
+    || focusDirty
+    || nodePresenceDirty
+    || animationActive
+    || animationJustEnded
+  ) && canRenderNow;
+}
+
+function commitFamilyTreeRenderState(focusId, hasNodes) {
+  familyTreeRenderState.force = false;
+  familyTreeRenderState.lastRenderMs = getNowMs();
+  familyTreeRenderState.lastFocusId = focusId;
+  familyTreeRenderState.lastStructureVersion = state.lineageStructureVersion;
+  familyTreeRenderState.lastVisualVersion = state.lineageVisualVersion;
+  familyTreeRenderState.lastHadNodes = hasNodes;
+  familyTreeRenderState.lastAnimationActive = state.tick <= familyTreeRenderState.animationUntilTick;
+  familyTreeRenderState.lastPanelCollapsed = false;
+}
+
+function drawFamilyTreePanel(options = {}) {
+  const fullRender = options.fullRender === true;
+  const targetCanvas = options.canvas || familyTreeCanvas;
+  const targetCtx = options.ctx || familyTreeCtx;
+  const runtimeTarget = targetCanvas === familyTreeCanvas && targetCtx === familyTreeCtx;
+  if (runtimeTarget && !shouldRenderFamilyTreePanel(fullRender)) {
+    return;
+  }
+
+  const focusId = getLineageFocusId();
+  const layoutData = getLineageLayoutData();
+  const {
+    nodes,
+    nodesByGeneration,
+    siblingGroupsByGeneration,
+    sortedNodes,
+    maxGeneration,
+    displayLayoutUnits,
+    layoutMinX,
+    layoutMaxX
+  } = layoutData;
+  const viewportWidth = runtimeTarget
+    ? Math.max(1, familyTreeScroll?.clientWidth || targetCanvas.width || 620)
+    : Math.max(1, targetCanvas.width || familyTreeCanvas?.width || 620);
+  const desiredCanvasWidth = getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth);
+  if (targetCanvas.width !== desiredCanvasWidth) {
+    targetCanvas.width = desiredCanvasWidth;
+    targetCtx.imageSmoothingEnabled = false;
+  }
+  if (runtimeTarget) {
+    targetCanvas.style.width = `${desiredCanvasWidth}px`;
+  }
+  const width = targetCanvas.width;
+  const ctx = targetCtx;
+  const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
+  const runtimeSlicedView = runtimeTarget && !fullRender;
+  let height = FAMILY_TREE_MIN_HEIGHT;
+  let viewWidth = width;
+  let viewLeft = 0;
+  const stickToBottom = familyTreeScroll
+    ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
+    : false;
+
+  if (exportFamilyTreeButton) {
+    const exportDisabled = nodes.length === 0;
+    setElementDisabled(exportFamilyTreeButton, exportDisabled);
+    setElementTitle(
+      exportFamilyTreeButton,
+      exportDisabled
+      ? "No family tree data is available to export yet."
+      : "Save the full family tree as a PNG image."
+    );
+  }
+
+  if (nodes.length === 0) {
+    state.lineageDisplayPositions.clear();
+    if (runtimeTarget) {
+      height = getFamilyTreeViewportHeight(displayScale);
+      familyTreeVirtualHeight = height;
+      if (familyTreeSpacer) {
+        familyTreeSpacer.style.height = "0px";
+      }
+    }
+    if (targetCanvas.width !== viewportWidth) {
+      targetCanvas.width = viewportWidth;
+      targetCtx.imageSmoothingEnabled = false;
+    }
+    if (runtimeTarget) {
+      targetCanvas.style.width = `${viewportWidth}px`;
+    }
+    if (targetCanvas.height !== height) {
+      targetCanvas.height = height;
+      targetCtx.imageSmoothingEnabled = false;
+    }
+    const emptyWidth = targetCanvas.width;
+    targetCtx.clearRect(0, 0, emptyWidth, height);
+    targetCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
+    targetCtx.fillRect(0, 0, emptyWidth, height);
+    targetCtx.fillStyle = "#ddfaff";
+    targetCtx.font = CANVAS_FONTS.section;
+    targetCtx.textAlign = "center";
+    targetCtx.fillText("LINEAGE MAP WAITING", emptyWidth * 0.5, height * 0.5 - 10);
+    targetCtx.fillStyle = "#8bbfca";
+    targetCtx.font = CANVAS_FONTS.body;
+    targetCtx.fillText("Founders and offspring will appear here as the habitat runs.", emptyWidth * 0.5, height * 0.5 + 14);
+    targetCtx.textAlign = "left";
+    setElementText(familyTreeStatus, "Tracking will begin as soon as the first family line is active.");
+    if (runtimeTarget) {
+      commitFamilyTreeRenderState(focusId, false);
+    }
+    return;
+  }
+
+  const familyTreeLeadPadding = Math.max(
+    FAMILY_TREE_TOP_PADDING,
+    getFamilyTreeViewportHeight(displayScale)
+      - FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN
+      - FAMILY_TREE_ROW_CENTER_OFFSET
+  );
+  const totalHeight = Math.max(
+    FAMILY_TREE_MIN_HEIGHT,
+    familyTreeLeadPadding + maxGeneration * FAMILY_TREE_ROW_GAP + FAMILY_TREE_BOTTOM_PADDING
+  );
+  let viewTop = 0;
+  if (runtimeSlicedView) {
+    height = getFamilyTreeViewportHeight(displayScale);
+    viewWidth = Math.min(width, getFamilyTreeViewportWidth(displayScale));
+    familyTreeVirtualHeight = totalHeight;
+    if (familyTreeSpacer) {
+      familyTreeSpacer.style.height = `${Math.max(0, (totalHeight - height) * displayScale)}px`;
+    }
+    viewTop = clamp(
+      (familyTreeScroll?.scrollTop || 0) / displayScale,
+      0,
+      Math.max(0, totalHeight - height)
+    );
+    viewLeft = clamp(
+      (familyTreeScroll?.scrollLeft || 0) / displayScale,
+      0,
+      Math.max(0, width - viewWidth)
+    );
+  } else {
+    height = totalHeight;
+  }
+  if (targetCanvas.height !== height) {
+    targetCanvas.height = height;
+    targetCtx.imageSmoothingEnabled = false;
+  }
+
+  const positions = new Map();
+  const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
+  const layoutSpan = layoutMaxX - layoutMinX;
+  const hasLayoutSpread = Number.isFinite(layoutSpan) && layoutSpan > 0.001;
+  const rowLeft = FAMILY_TREE_MARGIN_X;
+  const rowRight = width - FAMILY_TREE_MARGIN_X;
+
+  for (let generation = 1; generation <= maxGeneration; generation += 1) {
+    const generationNodes = nodesByGeneration.get(generation) || [];
+    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
+    const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
+
+    if (generationNodes.length === 0 || siblingGroups.length === 0) {
+      continue;
+    }
+
+    const siblingStepCount = siblingGroups.reduce(
+      (sum, group) => sum + Math.max(0, group.nodes.length - 1),
+      0
+    );
+    const groupGapCount = Math.max(0, siblingGroups.length - 1);
+    let siblingSpacingPx = FAMILY_TREE_SIBLING_LOCK_SPACING_PX;
+    let groupGapPx = FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX;
+    const desiredRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (desiredRowWidth > usableWidth) {
+      const availableAfterMinGroupGaps = Math.max(
+        0,
+        usableWidth - groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX
+      );
+      if (siblingStepCount > 0) {
+        siblingSpacingPx = Math.max(
+          FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX,
+          Math.min(
+            FAMILY_TREE_SIBLING_LOCK_SPACING_PX,
+            availableAfterMinGroupGaps / siblingStepCount
+          )
+        );
+      }
+      const remainingWidth = Math.max(0, usableWidth - siblingStepCount * siblingSpacingPx);
+      if (groupGapCount > 0) {
+        groupGapPx = Math.max(
+          FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX,
+          Math.min(
+            FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX,
+            remainingWidth / groupGapCount
+          )
+        );
+      }
+    }
+    const fittedRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (fittedRowWidth > usableWidth && siblingStepCount > 0) {
+      siblingSpacingPx = Math.max(
+        1,
+        (usableWidth - groupGapCount * groupGapPx) / siblingStepCount
+      );
+    }
+    const finalRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (finalRowWidth > usableWidth && groupGapCount > 0) {
+      groupGapPx = Math.max(
+        1,
+        (usableWidth - siblingStepCount * siblingSpacingPx) / groupGapCount
+      );
+    }
+
+    const placedGroups = [];
+    let previousGroupMax = null;
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      const firstNode = group.nodes[0];
+      const lastNode = group.nodes[group.nodes.length - 1];
+      const firstLayoutX = displayLayoutUnits.get(firstNode.id) ?? layoutMinX;
+      const lastLayoutX = displayLayoutUnits.get(lastNode.id) ?? firstLayoutX;
+      const layoutCenterX = (firstLayoutX + lastLayoutX) * 0.5;
+      const desiredCenterX = group.parentId !== null && positions.has(group.parentId)
+        ? positions.get(group.parentId).x
+        : hasLayoutSpread
+          ? rowLeft + ((layoutCenterX - layoutMinX) / layoutSpan) * usableWidth
+          : rowLeft + usableWidth * 0.5;
+      const groupHalfWidth = Math.max(0, (group.nodes.length - 1) * siblingSpacingPx * 0.5);
+      let centerX = clamp(desiredCenterX, rowLeft + groupHalfWidth, rowRight - groupHalfWidth);
+      if (previousGroupMax !== null) {
+        centerX = Math.max(centerX, previousGroupMax + groupGapPx + groupHalfWidth);
+      }
+      const groupMinX = centerX - groupHalfWidth;
+      const groupMaxX = centerX + groupHalfWidth;
+      placedGroups.push({
+        group,
+        centerX,
+        groupHalfWidth,
+        minX: groupMinX,
+        maxX: groupMaxX
+      });
+      previousGroupMax = groupMaxX;
+    }
+
+    if (placedGroups.length > 0) {
+      const overflowRight = placedGroups[placedGroups.length - 1].maxX - rowRight;
+      if (overflowRight > 0) {
+        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+          placedGroups[groupIndex].centerX -= overflowRight;
+          placedGroups[groupIndex].minX -= overflowRight;
+          placedGroups[groupIndex].maxX -= overflowRight;
+        }
+      }
+      const overflowLeft = rowLeft - placedGroups[0].minX;
+      if (overflowLeft > 0) {
+        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+          placedGroups[groupIndex].centerX += overflowLeft;
+          placedGroups[groupIndex].minX += overflowLeft;
+          placedGroups[groupIndex].maxX += overflowLeft;
+        }
+      }
+    }
+
+    for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+      const { group, centerX, groupHalfWidth } = placedGroups[groupIndex];
+      for (let nodeIndex = 0; nodeIndex < group.nodes.length; nodeIndex += 1) {
+        const node = group.nodes[nodeIndex];
+        positions.set(node.id, {
+          x: centerX - groupHalfWidth + nodeIndex * siblingSpacingPx,
+          y
+        });
+      }
+    }
+  }
+
+  const renderPositions = getFamilyTreeRenderPositions(positions);
+  lockFamilyTreeSiblingRenderPositions(renderPositions, positions, siblingGroupsByGeneration);
+
+  const trail = getLineageTrailSet(focusId);
+  const animations = new Map();
+  const activeNodeIds = new Set();
+  const activeLinkNodeIds = new Set();
+  const activeSiblingGroupKeys = new Set();
+  const activeNodeIdList = [];
+  const activeLinkNodeIdList = [];
+  const activeSiblingGroupKeyList = [];
+
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    const birthAge = Math.max(
+      0,
+      state.tick - (Number.isFinite(node.birthTick) ? node.birthTick : state.tick)
+    );
+    const hasParent = node.parentId !== null
+      && node.parentId !== undefined
+      && state.lineageNodes.has(node.parentId);
+    const revealDelay = hasParent ? FAMILY_TREE_LINK_DRAW_FRAMES : 0;
+    const revealProgress = clamp(
+      (birthAge - revealDelay) / Math.max(1, FAMILY_TREE_NODE_FLASH_FRAMES),
+      0,
+      1
+    );
+    const flashStrength = 1 - smooth01(revealProgress);
+    const recentDeath = isFamilyTreeNodeRecentDeath(node);
+    const activeNode = recentDeath
+      || (hasParent && birthAge < revealDelay + FAMILY_TREE_NODE_FLASH_FRAMES);
+    if (activeNode) {
+      activeNodeIds.add(node.id);
+      activeNodeIdList.push(node.id);
+    }
+
+    animations.set(node.id, {
+      lineProgress: hasParent ? clamp(birthAge / FAMILY_TREE_LINK_DRAW_FRAMES, 0, 1) : 1,
+      visible: !hasParent || birthAge >= revealDelay,
+      birthAge,
+      recentDeath,
+      activeNode,
+      activeLink: false,
+      flashStrength,
+      popScale: 1 + flashStrength * 0.45
+    });
+  }
+
+  const viewBottom = viewTop + height;
+  const viewRight = viewLeft + viewWidth;
+  for (let i = 0; i < sortedNodes.length; i += 1) {
+    const node = sortedNodes[i];
+    if (node.parentId === null || node.parentId === undefined) {
+      continue;
+    }
+
+    const parentNode = state.lineageNodes.get(node.parentId);
+    if (!parentNode) {
+      continue;
+    }
+
+    const animation = animations.get(node.id);
+    if (!animation) {
+      continue;
+    }
+
+    const parentDeathAge = !parentNode.alive && Number.isFinite(parentNode.deathTick)
+      ? Math.max(0, state.tick - parentNode.deathTick)
+      : Infinity;
+    const childDeathAge = !node.alive && Number.isFinite(node.deathTick)
+      ? Math.max(0, state.tick - node.deathTick)
+      : Infinity;
+    const activeLink = animation.lineProgress < 0.999
+      || parentDeathAge < FAMILY_TREE_LIVING_LINK_UNDRAW_FRAMES
+      || childDeathAge < FAMILY_TREE_LIVING_LINK_UNDRAW_FRAMES;
+    animation.activeLink = activeLink;
+    if (activeLink && !activeLinkNodeIds.has(node.id)) {
+      activeLinkNodeIds.add(node.id);
+      activeLinkNodeIdList.push(node.id);
+    }
+  }
+
+  for (const [generation, siblingGroups] of siblingGroupsByGeneration.entries()) {
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      if (!Array.isArray(group?.nodes) || group.nodes.length < 2) {
+        continue;
+      }
+      if (!group.nodes.some((node) => activeNodeIds.has(node.id))) {
+        continue;
+      }
+      const groupKey = getFamilyTreeSiblingGroupKey(generation, group);
+      activeSiblingGroupKeys.add(groupKey);
+      activeSiblingGroupKeyList.push(groupKey);
+    }
+  }
+
+  const renderData = {
+    fullRender,
+    runtimeSlicedView,
+    width,
+    height,
+    viewWidth,
+    viewTop,
+    viewBottom,
+    viewLeft,
+    viewRight,
+    nodesByGeneration,
+    siblingGroupsByGeneration,
+    sortedNodes,
+    renderPositions,
+    animations,
+    trail
+  };
+  const hasActiveOverlays = activeNodeIds.size > 0
+    || activeLinkNodeIds.size > 0
+    || activeSiblingGroupKeys.size > 0;
+
+  if (runtimeSlicedView) {
+    const staticBufferKey = [
+      width,
+      height,
+      viewTop,
+      viewLeft,
+      viewWidth,
+      maxGeneration,
+      familyTreeLeadPadding,
+      focusId ?? "none",
+      state.lineageStructureVersion,
+      state.lineageVisualVersion,
+      activeNodeIdList.join(",") || "-",
+      activeLinkNodeIdList.join(",") || "-",
+      activeSiblingGroupKeyList.join(",") || "-"
+    ].join("|");
+    const cacheHit = familyTreeStaticBuffer.canvas
+      && familyTreeStaticBuffer.ctx
+      && familyTreeStaticBuffer.key === staticBufferKey
+      && familyTreeStaticBuffer.canvas.width === width
+      && familyTreeStaticBuffer.canvas.height === height;
+
+    if (!cacheHit) {
+      if (!familyTreeStaticBuffer.canvas || !familyTreeStaticBuffer.ctx) {
+        const buffer = createBufferCanvas(width, height);
+        familyTreeStaticBuffer.canvas = buffer.canvas;
+        familyTreeStaticBuffer.ctx = buffer.ctx;
+      }
+      if (familyTreeStaticBuffer.canvas.width !== width) {
+        familyTreeStaticBuffer.canvas.width = width;
+      }
+      if (familyTreeStaticBuffer.canvas.height !== height) {
+        familyTreeStaticBuffer.canvas.height = height;
+      }
+      familyTreeStaticBuffer.ctx.imageSmoothingEnabled = false;
+      familyTreeStaticBuffer.key = staticBufferKey;
+      familyTreeStaticBuffer.ctx.clearRect(viewLeft, 0, viewWidth, height);
+      drawFamilyTreeBackground(
+        familyTreeStaticBuffer.ctx,
+        width,
+        height,
+        maxGeneration,
+        familyTreeLeadPadding,
+        viewTop,
+        viewLeft,
+        viewWidth
+      );
+      drawFamilyTreeConnectionLayers(familyTreeStaticBuffer.ctx, renderData, {
+        skipSiblingGroupKeys: activeSiblingGroupKeys,
+        skipLinkNodeIds: activeLinkNodeIds
+      });
+      drawFamilyTreeNodeLayer(familyTreeStaticBuffer.ctx, renderData, {
+        skipNodeIds: activeNodeIds
+      });
+    }
+
+    targetCtx.clearRect(viewLeft, 0, viewWidth, height);
+    targetCtx.drawImage(
+      familyTreeStaticBuffer.canvas,
+      viewLeft,
+      0,
+      viewWidth,
+      height,
+      viewLeft,
+      0,
+      viewWidth,
+      height
+    );
+
+    if (hasActiveOverlays) {
+      drawFamilyTreeConnectionLayers(targetCtx, renderData, {
+        onlySiblingGroupKeys: activeSiblingGroupKeys,
+        onlyLinkNodeIds: activeLinkNodeIds
+      });
+      drawFamilyTreeNodeLayer(targetCtx, renderData, {
+        onlyNodeIds: activeNodeIds
+      });
+    }
+  } else {
+    targetCtx.clearRect(0, 0, width, height);
+    drawFamilyTreeBackground(
+      targetCtx,
+      width,
+      height,
+      maxGeneration,
+      familyTreeLeadPadding,
+      viewTop,
+      viewLeft,
+      viewWidth
+    );
+    drawFamilyTreeConnectionLayers(targetCtx, renderData);
+    drawFamilyTreeNodeLayer(targetCtx, renderData);
+  }
 
   if (focusId && trail.size > 0) {
     const focusNode = state.lineageNodes.get(focusId);
