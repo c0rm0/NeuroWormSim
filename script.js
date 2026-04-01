@@ -240,6 +240,8 @@ const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
 const FAMILY_TREE_LAYOUT_FOLLOW = 0.24;
 const FAMILY_TREE_LAYOUT_SNAP_DISTANCE = 0.35;
+const FAMILY_TREE_SUBTREE_GAP_UNITS = 0.65;
+const FAMILY_TREE_ROOT_GAP_UNITS = 2.4;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS = 35;
 const FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS = 350;
@@ -2385,11 +2387,13 @@ function getLineageLayoutData() {
   }
 
   const nodes = Array.from(state.lineageNodes.values());
+  const nodesById = new Map();
   const nodesByGeneration = new Map();
   let maxGeneration = 1;
 
   for (let i = 0; i < nodes.length; i += 1) {
     const node = nodes[i];
+    nodesById.set(node.id, node);
     const generation = Math.max(1, Math.round(node.generation || 1));
     if (!nodesByGeneration.has(generation)) {
       nodesByGeneration.set(generation, []);
@@ -2400,19 +2404,155 @@ function getLineageLayoutData() {
     }
   }
 
-  for (const generationNodes of nodesByGeneration.values()) {
-    generationNodes.sort((a, b) => a.birthOrder - b.birthOrder);
+  const childIdsByParent = new Map();
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    const childIds = Array.isArray(node.childIds) ? node.childIds : [];
+    const orderedChildIds = [];
+    const seenChildIds = new Set();
+    for (let childIndex = 0; childIndex < childIds.length; childIndex += 1) {
+      const childId = childIds[childIndex];
+      if (seenChildIds.has(childId)) {
+        continue;
+      }
+      const childNode = nodesById.get(childId);
+      if (!childNode || childNode.parentId !== node.id) {
+        continue;
+      }
+      seenChildIds.add(childId);
+      orderedChildIds.push(childId);
+    }
+    orderedChildIds.sort((leftId, rightId) => {
+      const leftNode = nodesById.get(leftId);
+      const rightNode = nodesById.get(rightId);
+      return (leftNode?.birthOrder ?? 0) - (rightNode?.birthOrder ?? 0);
+    });
+    childIdsByParent.set(node.id, orderedChildIds);
   }
 
-  const sortedNodes = nodes.slice().sort((a, b) =>
-    a.generation - b.generation || a.birthOrder - b.birthOrder
+  const rootIds = nodes
+    .filter((node) => !nodesById.has(node.parentId))
+    .sort((leftNode, rightNode) =>
+      leftNode.generation - rightNode.generation
+      || leftNode.birthOrder - rightNode.birthOrder
+    )
+    .map((node) => node.id);
+  const layoutUnits = new Map();
+  const subtreeExtents = new Map();
+  const activeLayoutStack = new Set();
+  let layoutCursor = 0;
+
+  function placeLineageSubtree(nodeId) {
+    if (!nodesById.has(nodeId)) {
+      return null;
+    }
+    if (subtreeExtents.has(nodeId)) {
+      return subtreeExtents.get(nodeId);
+    }
+    if (activeLayoutStack.has(nodeId)) {
+      const fallbackExtent = { min: layoutCursor, max: layoutCursor };
+      layoutUnits.set(nodeId, layoutCursor);
+      subtreeExtents.set(nodeId, fallbackExtent);
+      layoutCursor += 1;
+      return fallbackExtent;
+    }
+
+    activeLayoutStack.add(nodeId);
+    const childIds = childIdsByParent.get(nodeId) || [];
+    let firstChildExtent = null;
+    let lastChildExtent = null;
+
+    for (let childIndex = 0; childIndex < childIds.length; childIndex += 1) {
+      if (childIndex > 0) {
+        layoutCursor += FAMILY_TREE_SUBTREE_GAP_UNITS;
+      }
+      const childExtent = placeLineageSubtree(childIds[childIndex]);
+      if (!childExtent) {
+        continue;
+      }
+      if (!firstChildExtent) {
+        firstChildExtent = childExtent;
+      }
+      lastChildExtent = childExtent;
+    }
+
+    let extent;
+    if (!firstChildExtent || !lastChildExtent) {
+      const x = layoutCursor;
+      layoutUnits.set(nodeId, x);
+      extent = { min: x, max: x };
+      layoutCursor += 1;
+    } else {
+      const x = (firstChildExtent.min + lastChildExtent.max) * 0.5;
+      layoutUnits.set(nodeId, x);
+      extent = {
+        min: Math.min(x, firstChildExtent.min),
+        max: Math.max(x, lastChildExtent.max)
+      };
+    }
+
+    subtreeExtents.set(nodeId, extent);
+    activeLayoutStack.delete(nodeId);
+    return extent;
+  }
+
+  const placedRootIds = new Set();
+  for (let rootIndex = 0; rootIndex < rootIds.length; rootIndex += 1) {
+    const rootId = rootIds[rootIndex];
+    if (placedRootIds.size > 0) {
+      layoutCursor += FAMILY_TREE_ROOT_GAP_UNITS;
+    }
+    placeLineageSubtree(rootId);
+    placedRootIds.add(rootId);
+  }
+
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    if (layoutUnits.has(node.id)) {
+      continue;
+    }
+    if (layoutUnits.size > 0) {
+      layoutCursor += FAMILY_TREE_ROOT_GAP_UNITS;
+    }
+    placeLineageSubtree(node.id);
+  }
+
+  for (const generationNodes of nodesByGeneration.values()) {
+    generationNodes.sort((leftNode, rightNode) =>
+      (layoutUnits.get(leftNode.id) ?? 0) - (layoutUnits.get(rightNode.id) ?? 0)
+      || leftNode.birthOrder - rightNode.birthOrder
+    );
+  }
+
+  const sortedNodes = nodes.slice().sort((leftNode, rightNode) =>
+    leftNode.generation - rightNode.generation
+    || (layoutUnits.get(leftNode.id) ?? 0) - (layoutUnits.get(rightNode.id) ?? 0)
+    || leftNode.birthOrder - rightNode.birthOrder
   );
+  let layoutMinX = Infinity;
+  let layoutMaxX = -Infinity;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const layoutX = layoutUnits.get(nodes[i].id);
+    if (!Number.isFinite(layoutX)) {
+      continue;
+    }
+    layoutMinX = Math.min(layoutMinX, layoutX);
+    layoutMaxX = Math.max(layoutMaxX, layoutX);
+  }
+  if (!Number.isFinite(layoutMinX) || !Number.isFinite(layoutMaxX)) {
+    layoutMinX = 0;
+    layoutMaxX = 0;
+  }
+
   const layoutData = {
     version: state.lineageStructureVersion,
     nodes,
     nodesByGeneration,
     sortedNodes,
-    maxGeneration
+    maxGeneration,
+    layoutUnits,
+    layoutMinX,
+    layoutMaxX
   };
 
   state.lineageLayoutCache = layoutData;
@@ -9741,7 +9881,15 @@ function drawFamilyTreePanel(options = {}) {
 
   const focusId = getLineageFocusId();
   const layoutData = getLineageLayoutData();
-  const { nodes, nodesByGeneration, sortedNodes, maxGeneration } = layoutData;
+  const {
+    nodes,
+    nodesByGeneration,
+    sortedNodes,
+    maxGeneration,
+    layoutUnits,
+    layoutMinX,
+    layoutMaxX
+  } = layoutData;
   const width = targetCanvas.width;
   const ctx = targetCtx;
   const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
@@ -9827,6 +9975,8 @@ function drawFamilyTreePanel(options = {}) {
 
   const positions = new Map();
   const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
+  const layoutSpan = layoutMaxX - layoutMinX;
+  const hasLayoutSpread = Number.isFinite(layoutSpan) && layoutSpan > 0.001;
 
   for (let generation = 1; generation <= maxGeneration; generation += 1) {
     const generationNodes = nodesByGeneration.get(generation) || [];
@@ -9836,11 +9986,13 @@ function drawFamilyTreePanel(options = {}) {
       continue;
     }
 
-    const spacing = usableWidth / (generationNodes.length + 1);
     for (let index = 0; index < generationNodes.length; index += 1) {
       const node = generationNodes[index];
+      const layoutX = layoutUnits.get(node.id) ?? layoutMinX;
       positions.set(node.id, {
-        x: FAMILY_TREE_MARGIN_X + spacing * (index + 1),
+        x: hasLayoutSpread
+          ? FAMILY_TREE_MARGIN_X + ((layoutX - layoutMinX) / layoutSpan) * usableWidth
+          : FAMILY_TREE_MARGIN_X + usableWidth * 0.5,
         y
       });
     }
