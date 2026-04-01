@@ -61,6 +61,27 @@
         </div>
       </section>
 
+      <section class="panel family-tree-panel data-panel" data-collapsible-panel>
+        <div class="panel-heading">
+          <div class="panel-heading-copy">
+            <h2>Family Tree</h2>
+            <p>Live ancestry map of creatures, offspring, and the highlighted inheritance trail of the current longest-lived line.</p>
+          </div>
+          <div class="panel-heading-actions">
+            <button id="exportFamilyTreeButton" class="panel-toggle-button" type="button">SAVE PNG</button>
+            <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true" title="Minimize this data panel.">MINIMIZE</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="family-tree-frame">
+            <div id="familyTreeScroll" class="family-tree-scroll" aria-label="Scrollable creature family tree">
+              <canvas id="familyTreeCanvas" width="620" height="360" aria-label="Live creature family tree"></canvas>
+            </div>
+          </div>
+          <p id="familyTreeStatus" class="family-tree-status">Tracking the active creature lineage.</p>
+        </div>
+      </section>
+
       <aside class="side-stack">
         <section class="panel action-panel data-panel is-collapsed" data-collapsible-panel>
           <div class="panel-heading">
@@ -91,27 +112,6 @@
           <div class="panel-body">
             <canvas id="networkCanvas" width="620" height="420" aria-label="Neural network activity panel"></canvas>
             <div id="creatureDetails" class="creature-details"></div>
-          </div>
-        </section>
-
-        <section class="panel family-tree-panel data-panel" data-collapsible-panel>
-          <div class="panel-heading">
-            <div class="panel-heading-copy">
-              <h2>Family Tree</h2>
-              <p>Live ancestry map of creatures, offspring, and the highlighted inheritance trail of the current longest-lived line.</p>
-            </div>
-            <div class="panel-heading-actions">
-              <button id="exportFamilyTreeButton" class="panel-toggle-button" type="button">SAVE PNG</button>
-              <button class="panel-toggle-button" type="button" data-panel-toggle aria-expanded="true" title="Minimize this data panel.">MINIMIZE</button>
-            </div>
-          </div>
-          <div class="panel-body">
-            <div class="family-tree-frame">
-              <div id="familyTreeScroll" class="family-tree-scroll" aria-label="Scrollable creature family tree">
-                <canvas id="familyTreeCanvas" width="620" height="360" aria-label="Live creature family tree"></canvas>
-              </div>
-            </div>
-            <p id="familyTreeStatus" class="family-tree-status">Tracking the active creature lineage.</p>
           </div>
         </section>
 
