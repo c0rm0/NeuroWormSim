@@ -236,6 +236,7 @@ const FAMILY_TREE_CONNECTOR_SAMPLES = 28;
 const FAMILY_TREE_ACTIVITY_WINDOW = FAMILY_TREE_LINK_DRAW_FRAMES + FAMILY_TREE_NODE_FLASH_FRAMES + 36;
 const FAMILY_TREE_ACTIVITY_VIEWPORT_ANCHOR = 0.38;
 const FAMILY_TREE_VIEW_OVERSCAN = FAMILY_TREE_ROW_GAP * 1.5;
+const FAMILY_TREE_VIEW_OVERSCAN_X = 120;
 const FAMILY_TREE_SCROLL_FOLLOW = 0.52;
 const FAMILY_TREE_SCROLL_SNAP_DISTANCE = FAMILY_TREE_ROW_GAP * 2.5;
 const FAMILY_TREE_LAYOUT_FOLLOW = 0.24;
@@ -243,7 +244,11 @@ const FAMILY_TREE_LAYOUT_SNAP_DISTANCE = 0.35;
 const FAMILY_TREE_SUBTREE_GAP_UNITS = 0.65;
 const FAMILY_TREE_ROOT_GAP_UNITS = 2.4;
 const FAMILY_TREE_SIBLING_SPACING_UNITS = 1;
-const FAMILY_TREE_PARENT_GROUP_GAP_UNITS = 1.6;
+const FAMILY_TREE_PARENT_GROUP_GAP_UNITS = 2.1;
+const FAMILY_TREE_SIBLING_LOCK_SPACING_PX = 24;
+const FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX = 18;
+const FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX = 40;
+const FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX = 20;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS = 35;
 const FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS = 350;
@@ -2648,6 +2653,52 @@ function getFamilyTreeRenderPositions(targetPositions) {
     current.y = Math.abs(target.y - current.y) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
       ? target.y
       : damp(current.y, target.y, FAMILY_TREE_LAYOUT_FOLLOW);
+  }
+
+  return renderPositions;
+}
+
+function lockFamilyTreeSiblingRenderPositions(renderPositions, targetPositions, siblingGroupsByGeneration) {
+  if (!renderPositions || !targetPositions || !siblingGroupsByGeneration) {
+    return renderPositions;
+  }
+
+  for (const siblingGroups of siblingGroupsByGeneration.values()) {
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      if (!Array.isArray(group?.nodes) || group.nodes.length < 2) {
+        continue;
+      }
+
+      const groupEntries = group.nodes
+        .map((node) => ({
+          nodeId: node.id,
+          current: renderPositions.get(node.id),
+          target: targetPositions.get(node.id)
+        }))
+        .filter((entry) => entry.current && entry.target);
+      if (groupEntries.length < 2) {
+        continue;
+      }
+
+      let currentCenterX = 0;
+      let targetCenterX = 0;
+      for (let index = 0; index < groupEntries.length; index += 1) {
+        currentCenterX += groupEntries[index].current.x;
+        targetCenterX += groupEntries[index].target.x;
+      }
+      currentCenterX /= groupEntries.length;
+      targetCenterX /= groupEntries.length;
+
+      const lockedCenterX = Math.abs(targetCenterX - currentCenterX) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
+        ? targetCenterX
+        : damp(currentCenterX, targetCenterX, FAMILY_TREE_LAYOUT_FOLLOW);
+
+      for (let index = 0; index < groupEntries.length; index += 1) {
+        const { current, target } = groupEntries[index];
+        current.x = lockedCenterX + (target.x - targetCenterX);
+      }
+    }
   }
 
   return renderPositions;
@@ -9838,15 +9889,26 @@ function createFamilyTreeGradient(ctx, startNode, endNode, startX, startY, endX,
   return gradient;
 }
 
-function drawFamilyTreeBackground(ctx, width, height, maxGeneration, familyTreeLeadPadding, viewTop = 0) {
+function drawFamilyTreeBackground(
+  ctx,
+  width,
+  height,
+  maxGeneration,
+  familyTreeLeadPadding,
+  viewTop = 0,
+  viewLeft = 0,
+  viewWidth = width
+) {
   const viewBottom = viewTop + height;
+  const visibleWidth = Math.max(1, Math.min(width - viewLeft, viewWidth));
+  const viewRight = Math.min(width, viewLeft + visibleWidth);
   ctx.fillStyle = "rgba(2, 8, 13, 0.98)";
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(viewLeft, 0, visibleWidth, height);
 
   const stripeStart = Math.floor(viewTop / 18) * 18;
   for (let worldY = stripeStart; worldY < viewBottom; worldY += 18) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
-    ctx.fillRect(0, Math.round(worldY - viewTop), width, 1);
+    ctx.fillRect(viewLeft, Math.round(worldY - viewTop), visibleWidth, 1);
   }
 
   const firstGeneration = Math.max(
@@ -9861,14 +9923,20 @@ function drawFamilyTreeBackground(ctx, width, height, maxGeneration, familyTreeL
   for (let generation = firstGeneration; generation <= lastGeneration; generation += 1) {
     const worldY = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
     const y = Math.round(worldY - viewTop);
+    const lineStart = Math.max(viewLeft, FAMILY_TREE_MARGIN_X - 12);
+    const lineEnd = Math.min(viewRight, width - (FAMILY_TREE_MARGIN_X - 12));
     ctx.fillStyle = "rgba(102, 220, 255, 0.08)";
-    ctx.fillRect(FAMILY_TREE_MARGIN_X - 12, y, width - (FAMILY_TREE_MARGIN_X - 12) * 2, 1);
-    ctx.fillStyle = generation % 2 === 0
-      ? "rgba(255, 241, 123, 0.52)"
-      : "rgba(157, 231, 255, 0.54)";
-    ctx.font = CANVAS_FONTS.compact;
-    ctx.textAlign = "left";
-    ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+    if (lineEnd > lineStart) {
+      ctx.fillRect(lineStart, y, lineEnd - lineStart, 1);
+    }
+    if (viewLeft <= 48) {
+      ctx.fillStyle = generation % 2 === 0
+        ? "rgba(255, 241, 123, 0.52)"
+        : "rgba(157, 231, 255, 0.54)";
+      ctx.font = CANVAS_FONTS.compact;
+      ctx.textAlign = "left";
+      ctx.fillText(`GEN ${String(generation).padStart(2, "0")}`, 12, y + 4);
+    }
   }
 }
 
@@ -9886,6 +9954,45 @@ function getFamilyTreeViewportHeight(displayScale = getFamilyTreeCanvasDisplaySc
     ? displayScale
     : 1;
   return Math.max(1, Math.round((familyTreeScroll?.clientHeight || FAMILY_TREE_MIN_HEIGHT) / safeScale));
+}
+
+function getFamilyTreeViewportWidth(displayScale = getFamilyTreeCanvasDisplayScale()) {
+  const safeScale = Number.isFinite(displayScale) && displayScale > 0
+    ? displayScale
+    : 1;
+  return Math.max(
+    1,
+    Math.round((familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) / safeScale)
+  );
+}
+
+function getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth = familyTreeScroll?.clientWidth || familyTreeCanvas?.width || 620) {
+  const minimumWidth = Math.max(620, Math.round(viewportWidth || 620));
+  if (!layoutData?.nodes?.length) {
+    return minimumWidth;
+  }
+
+  let desiredUsableWidth = Math.max(0, minimumWidth - FAMILY_TREE_MARGIN_X * 2);
+  const siblingGroupsByGeneration = layoutData.siblingGroupsByGeneration;
+  if (siblingGroupsByGeneration instanceof Map) {
+    for (const siblingGroups of siblingGroupsByGeneration.values()) {
+      const siblingStepCount = siblingGroups.reduce(
+        (sum, group) => sum + Math.max(0, (group?.nodes?.length || 0) - 1),
+        0
+      );
+      const groupGapCount = Math.max(0, siblingGroups.length - 1);
+      desiredUsableWidth = Math.max(
+        desiredUsableWidth,
+        siblingStepCount * FAMILY_TREE_SIBLING_LOCK_SPACING_PX
+        + groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX
+      );
+    }
+  }
+
+  return Math.max(
+    minimumWidth,
+    Math.ceil(FAMILY_TREE_MARGIN_X * 2 + desiredUsableWidth)
+  );
 }
 
 function shouldRenderFamilyTreePanel(fullRender = false) {
@@ -9955,10 +10062,24 @@ function drawFamilyTreePanel(options = {}) {
     layoutMinX,
     layoutMaxX
   } = layoutData;
+  const viewportWidth = runtimeTarget
+    ? Math.max(1, familyTreeScroll?.clientWidth || targetCanvas.width || 620)
+    : Math.max(1, targetCanvas.width || familyTreeCanvas?.width || 620);
+  const desiredCanvasWidth = getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth);
+  if (targetCanvas.width !== desiredCanvasWidth) {
+    targetCanvas.width = desiredCanvasWidth;
+    targetCtx.imageSmoothingEnabled = false;
+  }
+  if (runtimeTarget) {
+    targetCanvas.style.width = `${desiredCanvasWidth}px`;
+  }
   const width = targetCanvas.width;
   const ctx = targetCtx;
   const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
+  const runtimeSlicedView = runtimeTarget && !fullRender;
   let height = FAMILY_TREE_MIN_HEIGHT;
+  let viewWidth = width;
+  let viewLeft = 0;
   const stickToBottom = familyTreeScroll
     ? familyTreeScroll.scrollTop + familyTreeScroll.clientHeight >= familyTreeScroll.scrollHeight - 28
     : false;
@@ -9983,20 +10104,28 @@ function drawFamilyTreePanel(options = {}) {
         familyTreeSpacer.style.height = "0px";
       }
     }
+    if (targetCanvas.width !== viewportWidth) {
+      targetCanvas.width = viewportWidth;
+      targetCtx.imageSmoothingEnabled = false;
+    }
+    if (runtimeTarget) {
+      targetCanvas.style.width = `${viewportWidth}px`;
+    }
     if (targetCanvas.height !== height) {
       targetCanvas.height = height;
       targetCtx.imageSmoothingEnabled = false;
     }
-    targetCtx.clearRect(0, 0, width, height);
+    const emptyWidth = targetCanvas.width;
+    targetCtx.clearRect(0, 0, emptyWidth, height);
     targetCtx.fillStyle = "rgba(2, 8, 13, 0.98)";
-    targetCtx.fillRect(0, 0, width, height);
+    targetCtx.fillRect(0, 0, emptyWidth, height);
     targetCtx.fillStyle = "#ddfaff";
     targetCtx.font = CANVAS_FONTS.section;
     targetCtx.textAlign = "center";
-    targetCtx.fillText("LINEAGE MAP WAITING", width * 0.5, height * 0.5 - 10);
+    targetCtx.fillText("LINEAGE MAP WAITING", emptyWidth * 0.5, height * 0.5 - 10);
     targetCtx.fillStyle = "#8bbfca";
     targetCtx.font = CANVAS_FONTS.body;
-    targetCtx.fillText("Founders and offspring will appear here as the habitat runs.", width * 0.5, height * 0.5 + 14);
+    targetCtx.fillText("Founders and offspring will appear here as the habitat runs.", emptyWidth * 0.5, height * 0.5 + 14);
     targetCtx.textAlign = "left";
     setElementText(familyTreeStatus, "Tracking will begin as soon as the first family line is active.");
     if (runtimeTarget) {
@@ -10016,8 +10145,9 @@ function drawFamilyTreePanel(options = {}) {
     familyTreeLeadPadding + maxGeneration * FAMILY_TREE_ROW_GAP + FAMILY_TREE_BOTTOM_PADDING
   );
   let viewTop = 0;
-  if (runtimeTarget && !fullRender) {
+  if (runtimeSlicedView) {
     height = getFamilyTreeViewportHeight(displayScale);
+    viewWidth = Math.min(width, getFamilyTreeViewportWidth(displayScale));
     familyTreeVirtualHeight = totalHeight;
     if (familyTreeSpacer) {
       familyTreeSpacer.style.height = `${Math.max(0, (totalHeight - height) * displayScale)}px`;
@@ -10027,6 +10157,11 @@ function drawFamilyTreePanel(options = {}) {
       0,
       Math.max(0, totalHeight - height)
     );
+    viewLeft = clamp(
+      (familyTreeScroll?.scrollLeft || 0) / displayScale,
+      0,
+      Math.max(0, width - viewWidth)
+    );
   } else {
     height = totalHeight;
   }
@@ -10035,35 +10170,150 @@ function drawFamilyTreePanel(options = {}) {
     targetCtx.imageSmoothingEnabled = false;
   }
 
-  targetCtx.clearRect(0, 0, width, height);
-  drawFamilyTreeBackground(targetCtx, width, height, maxGeneration, familyTreeLeadPadding, viewTop);
+  if (runtimeSlicedView) {
+    targetCtx.clearRect(viewLeft, 0, viewWidth, height);
+  } else {
+    targetCtx.clearRect(0, 0, width, height);
+  }
+  drawFamilyTreeBackground(
+    targetCtx,
+    width,
+    height,
+    maxGeneration,
+    familyTreeLeadPadding,
+    viewTop,
+    viewLeft,
+    viewWidth
+  );
 
   const positions = new Map();
   const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
   const layoutSpan = layoutMaxX - layoutMinX;
   const hasLayoutSpread = Number.isFinite(layoutSpan) && layoutSpan > 0.001;
+  const rowLeft = FAMILY_TREE_MARGIN_X;
+  const rowRight = width - FAMILY_TREE_MARGIN_X;
 
   for (let generation = 1; generation <= maxGeneration; generation += 1) {
     const generationNodes = nodesByGeneration.get(generation) || [];
+    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
     const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
 
-    if (generationNodes.length === 0) {
+    if (generationNodes.length === 0 || siblingGroups.length === 0) {
       continue;
     }
 
-    for (let index = 0; index < generationNodes.length; index += 1) {
-      const node = generationNodes[index];
-      const layoutX = displayLayoutUnits.get(node.id) ?? layoutMinX;
-      positions.set(node.id, {
-        x: hasLayoutSpread
-          ? FAMILY_TREE_MARGIN_X + ((layoutX - layoutMinX) / layoutSpan) * usableWidth
-          : FAMILY_TREE_MARGIN_X + usableWidth * 0.5,
-        y
+    const siblingStepCount = siblingGroups.reduce(
+      (sum, group) => sum + Math.max(0, group.nodes.length - 1),
+      0
+    );
+    const groupGapCount = Math.max(0, siblingGroups.length - 1);
+    let siblingSpacingPx = FAMILY_TREE_SIBLING_LOCK_SPACING_PX;
+    let groupGapPx = FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX;
+    const desiredRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (desiredRowWidth > usableWidth) {
+      const availableAfterMinGroupGaps = Math.max(
+        0,
+        usableWidth - groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX
+      );
+      if (siblingStepCount > 0) {
+        siblingSpacingPx = Math.max(
+          FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX,
+          Math.min(
+            FAMILY_TREE_SIBLING_LOCK_SPACING_PX,
+            availableAfterMinGroupGaps / siblingStepCount
+          )
+        );
+      }
+      const remainingWidth = Math.max(0, usableWidth - siblingStepCount * siblingSpacingPx);
+      if (groupGapCount > 0) {
+        groupGapPx = Math.max(
+          FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX,
+          Math.min(
+            FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX,
+            remainingWidth / groupGapCount
+          )
+        );
+      }
+    }
+    const fittedRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (fittedRowWidth > usableWidth && siblingStepCount > 0) {
+      siblingSpacingPx = Math.max(
+        1,
+        (usableWidth - groupGapCount * groupGapPx) / siblingStepCount
+      );
+    }
+    const finalRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
+    if (finalRowWidth > usableWidth && groupGapCount > 0) {
+      groupGapPx = Math.max(
+        1,
+        (usableWidth - siblingStepCount * siblingSpacingPx) / groupGapCount
+      );
+    }
+
+    const placedGroups = [];
+    let previousGroupMax = null;
+    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
+      const group = siblingGroups[groupIndex];
+      const firstNode = group.nodes[0];
+      const lastNode = group.nodes[group.nodes.length - 1];
+      const firstLayoutX = displayLayoutUnits.get(firstNode.id) ?? layoutMinX;
+      const lastLayoutX = displayLayoutUnits.get(lastNode.id) ?? firstLayoutX;
+      const layoutCenterX = (firstLayoutX + lastLayoutX) * 0.5;
+      const desiredCenterX = group.parentId !== null && positions.has(group.parentId)
+        ? positions.get(group.parentId).x
+        : hasLayoutSpread
+          ? rowLeft + ((layoutCenterX - layoutMinX) / layoutSpan) * usableWidth
+          : rowLeft + usableWidth * 0.5;
+      const groupHalfWidth = Math.max(0, (group.nodes.length - 1) * siblingSpacingPx * 0.5);
+      let centerX = clamp(desiredCenterX, rowLeft + groupHalfWidth, rowRight - groupHalfWidth);
+      if (previousGroupMax !== null) {
+        centerX = Math.max(centerX, previousGroupMax + groupGapPx + groupHalfWidth);
+      }
+      const groupMinX = centerX - groupHalfWidth;
+      const groupMaxX = centerX + groupHalfWidth;
+      placedGroups.push({
+        group,
+        centerX,
+        groupHalfWidth,
+        minX: groupMinX,
+        maxX: groupMaxX
       });
+      previousGroupMax = groupMaxX;
+    }
+
+    if (placedGroups.length > 0) {
+      const overflowRight = placedGroups[placedGroups.length - 1].maxX - rowRight;
+      if (overflowRight > 0) {
+        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+          placedGroups[groupIndex].centerX -= overflowRight;
+          placedGroups[groupIndex].minX -= overflowRight;
+          placedGroups[groupIndex].maxX -= overflowRight;
+        }
+      }
+      const overflowLeft = rowLeft - placedGroups[0].minX;
+      if (overflowLeft > 0) {
+        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+          placedGroups[groupIndex].centerX += overflowLeft;
+          placedGroups[groupIndex].minX += overflowLeft;
+          placedGroups[groupIndex].maxX += overflowLeft;
+        }
+      }
+    }
+
+    for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
+      const { group, centerX, groupHalfWidth } = placedGroups[groupIndex];
+      for (let nodeIndex = 0; nodeIndex < group.nodes.length; nodeIndex += 1) {
+        const node = group.nodes[nodeIndex];
+        positions.set(node.id, {
+          x: centerX - groupHalfWidth + nodeIndex * siblingSpacingPx,
+          y
+        });
+      }
     }
   }
 
   const renderPositions = getFamilyTreeRenderPositions(positions);
+  lockFamilyTreeSiblingRenderPositions(renderPositions, positions, siblingGroupsByGeneration);
 
   const trail = getLineageTrailSet(focusId);
   const animations = new Map();
@@ -10094,8 +10344,14 @@ function drawFamilyTreePanel(options = {}) {
   }
 
   const viewBottom = viewTop + height;
+  const viewRight = viewLeft + viewWidth;
 
   ctx.save();
+  if (runtimeSlicedView) {
+    ctx.beginPath();
+    ctx.rect(viewLeft, 0, viewWidth, height);
+    ctx.clip();
+  }
   ctx.globalCompositeOperation = "lighter";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -10125,12 +10381,16 @@ function drawFamilyTreePanel(options = {}) {
         continue;
       }
 
+      const siblingLeftX = siblingPositions[0].position.x;
+      const siblingRightX = siblingPositions[siblingPositions.length - 1].position.x;
       const siblingBarWorldY = siblingPositions[0].position.y - 12;
       if (
         !fullRender
         && (
           siblingBarWorldY < viewTop - FAMILY_TREE_VIEW_OVERSCAN
           || siblingBarWorldY > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+          || siblingRightX < viewLeft - FAMILY_TREE_VIEW_OVERSCAN_X
+          || siblingLeftX > viewRight + FAMILY_TREE_VIEW_OVERSCAN_X
         )
       ) {
         continue;
@@ -10233,6 +10493,8 @@ function drawFamilyTreePanel(options = {}) {
       && (
         Math.max(startYWorld, endYWorld) < viewTop - FAMILY_TREE_VIEW_OVERSCAN
         || Math.min(startYWorld, endYWorld) > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+        || Math.max(parentPos.x, childPos.x) < viewLeft - FAMILY_TREE_VIEW_OVERSCAN_X
+        || Math.min(parentPos.x, childPos.x) > viewRight + FAMILY_TREE_VIEW_OVERSCAN_X
       )
     ) {
       continue;
@@ -10343,6 +10605,12 @@ function drawFamilyTreePanel(options = {}) {
   }
   ctx.restore();
 
+  if (runtimeSlicedView) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(viewLeft, 0, viewWidth, height);
+    ctx.clip();
+  }
   for (let i = 0; i < sortedNodes.length; i += 1) {
     const node = sortedNodes[i];
     const position = renderPositions.get(node.id);
@@ -10354,6 +10622,8 @@ function drawFamilyTreePanel(options = {}) {
       && (
         position.y < viewTop - FAMILY_TREE_VIEW_OVERSCAN
         || position.y > viewBottom + FAMILY_TREE_VIEW_OVERSCAN
+        || position.x < viewLeft - FAMILY_TREE_VIEW_OVERSCAN_X
+        || position.x > viewRight + FAMILY_TREE_VIEW_OVERSCAN_X
       )
     ) {
       continue;
@@ -10517,6 +10787,9 @@ function drawFamilyTreePanel(options = {}) {
       );
     }
 
+    ctx.restore();
+  }
+  if (runtimeSlicedView) {
     ctx.restore();
   }
 
