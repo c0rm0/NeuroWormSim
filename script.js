@@ -2293,11 +2293,40 @@ function syncLineageCreatures() {
   }
 }
 
+function shouldHideFamilyTreeNode(node, nodesById = state.lineageNodes) {
+  if (!node) {
+    return false;
+  }
+
+  const generation = Math.max(1, Math.round(node.generation || 1));
+  if (generation !== 1) {
+    return false;
+  }
+
+  const childIds = Array.isArray(node.childIds) ? node.childIds : [];
+  for (let index = 0; index < childIds.length; index += 1) {
+    const childNode = nodesById.get(childIds[index]);
+    if (childNode && childNode.parentId === node.id) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function getLineageFocusId() {
-  if (state.featured?.id && state.lineageNodes.has(state.featured.id)) {
+  if (
+    state.featured?.id
+    && state.lineageNodes.has(state.featured.id)
+    && !shouldHideFamilyTreeNode(state.lineageNodes.get(state.featured.id))
+  ) {
     return state.featured.id;
   }
-  if (state.extinctionSpecimen?.id && state.lineageNodes.has(state.extinctionSpecimen.id)) {
+  if (
+    state.extinctionSpecimen?.id
+    && state.lineageNodes.has(state.extinctionSpecimen.id)
+    && !shouldHideFamilyTreeNode(state.lineageNodes.get(state.extinctionSpecimen.id))
+  ) {
     return state.extinctionSpecimen.id;
   }
   return null;
@@ -2409,7 +2438,14 @@ function getLineageLayoutData() {
     return cachedLayout;
   }
 
-  const nodes = Array.from(state.lineageNodes.values());
+  const visibleNodeIds = new Set();
+  for (const node of state.lineageNodes.values()) {
+    if (!shouldHideFamilyTreeNode(node, state.lineageNodes)) {
+      visibleNodeIds.add(node.id);
+    }
+  }
+
+  const nodes = Array.from(state.lineageNodes.values()).filter((node) => visibleNodeIds.has(node.id));
   const nodesById = new Map();
   const nodesByGeneration = new Map();
   let maxGeneration = 1;
@@ -2436,6 +2472,9 @@ function getLineageLayoutData() {
     for (let childIndex = 0; childIndex < childIds.length; childIndex += 1) {
       const childId = childIds[childIndex];
       if (seenChildIds.has(childId)) {
+        continue;
+      }
+      if (!visibleNodeIds.has(childId)) {
         continue;
       }
       const childNode = nodesById.get(childId);
