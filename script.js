@@ -245,10 +245,7 @@ const FAMILY_TREE_SUBTREE_GAP_UNITS = 0.65;
 const FAMILY_TREE_ROOT_GAP_UNITS = 2.4;
 const FAMILY_TREE_SIBLING_SPACING_UNITS = 1;
 const FAMILY_TREE_PARENT_GROUP_GAP_UNITS = 2.1;
-const FAMILY_TREE_SIBLING_LOCK_SPACING_PX = 24;
-const FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX = 18;
-const FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX = 40;
-const FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX = 20;
+const FAMILY_TREE_LAYOUT_UNIT_PX = 32;
 const FAMILY_TREE_EARLY_STAGE_BOTTOM_MARGIN = FAMILY_TREE_BOTTOM_PADDING + 12;
 const FAMILY_TREE_RENDER_ANIMATION_INTERVAL_MS = 35;
 const FAMILY_TREE_RENDER_ACTIVE_INTERVAL_MS = 350;
@@ -2173,6 +2170,7 @@ function registerLineageCreature(creature, parentId = null) {
     node.birthTick = Number.isFinite(node.birthTick) ? node.birthTick : state.tick;
     node.deathTick = node.alive ? null : node.deathTick ?? state.tick;
     node.childIds = Array.isArray(node.childIds) ? node.childIds : [];
+    node.preserveInFamilyTree = node.preserveInFamilyTree === true;
     node.pendingBirth = false;
     layoutChanged = node.generation !== previousGeneration;
     if (layoutChanged) {
@@ -2194,6 +2192,7 @@ function registerLineageCreature(creature, parentId = null) {
       birthTick: state.tick,
       deathTick: null,
       childIds: [],
+      preserveInFamilyTree: false,
       pendingBirth: false
     };
 
@@ -2240,6 +2239,7 @@ function registerLineagePreviewNode(descriptor, parentId = null) {
       birthTick: state.tick,
       deathTick: null,
       childIds: [],
+      preserveInFamilyTree: false,
       pendingBirth: true
     };
 
@@ -2297,18 +2297,13 @@ function shouldHideFamilyTreeNode(node, nodesById = state.lineageNodes) {
   if (!node) {
     return false;
   }
-
-  const generation = Math.max(1, Math.round(node.generation || 1));
-  if (generation !== 1) {
+  if (node.preserveInFamilyTree === true) {
     return false;
   }
 
-  const childIds = Array.isArray(node.childIds) ? node.childIds : [];
-  for (let index = 0; index < childIds.length; index += 1) {
-    const childNode = nodesById.get(childIds[index]);
-    if (childNode && childNode.parentId === node.id) {
-      return false;
-    }
+  const generation = Math.max(1, Math.round(node.generation || 1));
+  if (generation !== 1 || node.alive) {
+    return false;
   }
 
   return true;
@@ -2707,52 +2702,6 @@ function getFamilyTreeRenderPositions(targetPositions) {
   }
 
   familyTreeRenderState.lastPositionStructureVersion = state.lineageStructureVersion;
-  return renderPositions;
-}
-
-function lockFamilyTreeSiblingRenderPositions(renderPositions, targetPositions, siblingGroupsByGeneration) {
-  if (!renderPositions || !targetPositions || !siblingGroupsByGeneration) {
-    return renderPositions;
-  }
-
-  for (const siblingGroups of siblingGroupsByGeneration.values()) {
-    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
-      const group = siblingGroups[groupIndex];
-      if (!Array.isArray(group?.nodes) || group.nodes.length < 2) {
-        continue;
-      }
-
-      const groupEntries = group.nodes
-        .map((node) => ({
-          nodeId: node.id,
-          current: renderPositions.get(node.id),
-          target: targetPositions.get(node.id)
-        }))
-        .filter((entry) => entry.current && entry.target);
-      if (groupEntries.length < 2) {
-        continue;
-      }
-
-      let currentCenterX = 0;
-      let targetCenterX = 0;
-      for (let index = 0; index < groupEntries.length; index += 1) {
-        currentCenterX += groupEntries[index].current.x;
-        targetCenterX += groupEntries[index].target.x;
-      }
-      currentCenterX /= groupEntries.length;
-      targetCenterX /= groupEntries.length;
-
-      const lockedCenterX = Math.abs(targetCenterX - currentCenterX) <= FAMILY_TREE_LAYOUT_SNAP_DISTANCE
-        ? targetCenterX
-        : damp(currentCenterX, targetCenterX, FAMILY_TREE_LAYOUT_FOLLOW);
-
-      for (let index = 0; index < groupEntries.length; index += 1) {
-        const { current, target } = groupEntries[index];
-        current.x = lockedCenterX + (target.x - targetCenterX);
-      }
-    }
-  }
-
   return renderPositions;
 }
 
@@ -4845,6 +4794,12 @@ function killCreature(creature) {
     lineageNode.deathTick = state.tick;
     lineageNode.age = creature.age;
     lineageNode.recentAction = creature.recentAction;
+    if (wasLastLiving) {
+      lineageNode.preserveInFamilyTree = true;
+    }
+    if (shouldHideFamilyTreeNode(lineageNode)) {
+      invalidateLineageLayoutCache();
+    }
   }
   markFamilyTreeVisualChange();
   invalidateFamilyTreeRender(FAMILY_TREE_DEATH_WINK_FRAMES + FAMILY_TREE_LINK_DRAW_FRAMES);
@@ -10542,22 +10497,14 @@ function getFamilyTreeDesiredCanvasWidth(layoutData, viewportWidth = familyTreeS
     return minimumWidth;
   }
 
-  let desiredUsableWidth = Math.max(0, minimumWidth - FAMILY_TREE_MARGIN_X * 2);
-  const siblingGroupsByGeneration = layoutData.siblingGroupsByGeneration;
-  if (siblingGroupsByGeneration instanceof Map) {
-    for (const siblingGroups of siblingGroupsByGeneration.values()) {
-      const siblingStepCount = siblingGroups.reduce(
-        (sum, group) => sum + Math.max(0, (group?.nodes?.length || 0) - 1),
-        0
-      );
-      const groupGapCount = Math.max(0, siblingGroups.length - 1);
-      desiredUsableWidth = Math.max(
-        desiredUsableWidth,
-        siblingStepCount * FAMILY_TREE_SIBLING_LOCK_SPACING_PX
-        + groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX
-      );
-    }
-  }
+  const layoutSpan = Math.max(0, (layoutData.layoutMaxX ?? 0) - (layoutData.layoutMinX ?? 0));
+  const desiredUsableWidth = Math.max(
+    0,
+    Math.max(
+      minimumWidth - FAMILY_TREE_MARGIN_X * 2,
+      Math.ceil(layoutSpan * FAMILY_TREE_LAYOUT_UNIT_PX + FAMILY_TREE_LAYOUT_UNIT_PX * 2)
+    )
+  );
 
   return Math.max(
     minimumWidth,
@@ -10650,7 +10597,6 @@ function drawFamilyTreePanel(options = {}) {
     targetCanvas.style.width = `${desiredCanvasWidth}px`;
   }
   const width = targetCanvas.width;
-  const ctx = targetCtx;
   const displayScale = runtimeTarget ? getFamilyTreeCanvasDisplayScale(targetCanvas) : 1;
   const runtimeSlicedView = runtimeTarget && !fullRender;
   let height = FAMILY_TREE_MIN_HEIGHT;
@@ -10748,132 +10694,28 @@ function drawFamilyTreePanel(options = {}) {
 
   const positions = new Map();
   const usableWidth = width - FAMILY_TREE_MARGIN_X * 2;
-  const layoutSpan = layoutMaxX - layoutMinX;
+  const layoutSpan = Math.max(0, layoutMaxX - layoutMinX);
   const hasLayoutSpread = Number.isFinite(layoutSpan) && layoutSpan > 0.001;
   const rowLeft = FAMILY_TREE_MARGIN_X;
-  const rowRight = width - FAMILY_TREE_MARGIN_X;
 
   for (let generation = 1; generation <= maxGeneration; generation += 1) {
     const generationNodes = nodesByGeneration.get(generation) || [];
-    const siblingGroups = siblingGroupsByGeneration.get(generation) || [];
     const y = familyTreeLeadPadding + (generation - 1) * FAMILY_TREE_ROW_GAP + FAMILY_TREE_ROW_CENTER_OFFSET;
 
-    if (generationNodes.length === 0 || siblingGroups.length === 0) {
-      continue;
-    }
-
-    const siblingStepCount = siblingGroups.reduce(
-      (sum, group) => sum + Math.max(0, group.nodes.length - 1),
-      0
-    );
-    const groupGapCount = Math.max(0, siblingGroups.length - 1);
-    let siblingSpacingPx = FAMILY_TREE_SIBLING_LOCK_SPACING_PX;
-    let groupGapPx = FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX;
-    const desiredRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (desiredRowWidth > usableWidth) {
-      const availableAfterMinGroupGaps = Math.max(
-        0,
-        usableWidth - groupGapCount * FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX
-      );
-      if (siblingStepCount > 0) {
-        siblingSpacingPx = Math.max(
-          FAMILY_TREE_SIBLING_LOCK_MIN_SPACING_PX,
-          Math.min(
-            FAMILY_TREE_SIBLING_LOCK_SPACING_PX,
-            availableAfterMinGroupGaps / siblingStepCount
-          )
-        );
-      }
-      const remainingWidth = Math.max(0, usableWidth - siblingStepCount * siblingSpacingPx);
-      if (groupGapCount > 0) {
-        groupGapPx = Math.max(
-          FAMILY_TREE_NON_SIBLING_GROUP_MIN_GAP_PX,
-          Math.min(
-            FAMILY_TREE_NON_SIBLING_GROUP_GAP_PX,
-            remainingWidth / groupGapCount
-          )
-        );
-      }
-    }
-    const fittedRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (fittedRowWidth > usableWidth && siblingStepCount > 0) {
-      siblingSpacingPx = Math.max(
-        1,
-        (usableWidth - groupGapCount * groupGapPx) / siblingStepCount
-      );
-    }
-    const finalRowWidth = siblingStepCount * siblingSpacingPx + groupGapCount * groupGapPx;
-    if (finalRowWidth > usableWidth && groupGapCount > 0) {
-      groupGapPx = Math.max(
-        1,
-        (usableWidth - siblingStepCount * siblingSpacingPx) / groupGapCount
-      );
-    }
-
-    const placedGroups = [];
-    let previousGroupMax = null;
-    for (let groupIndex = 0; groupIndex < siblingGroups.length; groupIndex += 1) {
-      const group = siblingGroups[groupIndex];
-      const firstNode = group.nodes[0];
-      const lastNode = group.nodes[group.nodes.length - 1];
-      const firstLayoutX = displayLayoutUnits.get(firstNode.id) ?? layoutMinX;
-      const lastLayoutX = displayLayoutUnits.get(lastNode.id) ?? firstLayoutX;
-      const layoutCenterX = (firstLayoutX + lastLayoutX) * 0.5;
-      const desiredCenterX = group.parentId !== null && positions.has(group.parentId)
-        ? positions.get(group.parentId).x
-        : hasLayoutSpread
-          ? rowLeft + ((layoutCenterX - layoutMinX) / layoutSpan) * usableWidth
-          : rowLeft + usableWidth * 0.5;
-      const groupHalfWidth = Math.max(0, (group.nodes.length - 1) * siblingSpacingPx * 0.5);
-      let centerX = clamp(desiredCenterX, rowLeft + groupHalfWidth, rowRight - groupHalfWidth);
-      if (previousGroupMax !== null) {
-        centerX = Math.max(centerX, previousGroupMax + groupGapPx + groupHalfWidth);
-      }
-      const groupMinX = centerX - groupHalfWidth;
-      const groupMaxX = centerX + groupHalfWidth;
-      placedGroups.push({
-        group,
-        centerX,
-        groupHalfWidth,
-        minX: groupMinX,
-        maxX: groupMaxX
+    for (let index = 0; index < generationNodes.length; index += 1) {
+      const node = generationNodes[index];
+      const layoutX = displayLayoutUnits.get(node.id);
+      const x = hasLayoutSpread && Number.isFinite(layoutX)
+        ? rowLeft + ((layoutX - layoutMinX) / layoutSpan) * usableWidth
+        : rowLeft + usableWidth * 0.5;
+      positions.set(node.id, {
+        x,
+        y
       });
-      previousGroupMax = groupMaxX;
-    }
-
-    if (placedGroups.length > 0) {
-      const overflowRight = placedGroups[placedGroups.length - 1].maxX - rowRight;
-      if (overflowRight > 0) {
-        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-          placedGroups[groupIndex].centerX -= overflowRight;
-          placedGroups[groupIndex].minX -= overflowRight;
-          placedGroups[groupIndex].maxX -= overflowRight;
-        }
-      }
-      const overflowLeft = rowLeft - placedGroups[0].minX;
-      if (overflowLeft > 0) {
-        for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-          placedGroups[groupIndex].centerX += overflowLeft;
-          placedGroups[groupIndex].minX += overflowLeft;
-          placedGroups[groupIndex].maxX += overflowLeft;
-        }
-      }
-    }
-
-    for (let groupIndex = 0; groupIndex < placedGroups.length; groupIndex += 1) {
-      const { group, centerX, groupHalfWidth } = placedGroups[groupIndex];
-      for (let nodeIndex = 0; nodeIndex < group.nodes.length; nodeIndex += 1) {
-        const node = group.nodes[nodeIndex];
-        positions.set(node.id, {
-          x: centerX - groupHalfWidth + nodeIndex * siblingSpacingPx,
-          y
-        });
-      }
     }
   }
 
   const renderPositions = getFamilyTreeRenderPositions(positions);
-  lockFamilyTreeSiblingRenderPositions(renderPositions, positions, siblingGroupsByGeneration);
 
   const trail = getLineageTrailSet(focusId);
   const animations = new Map();
